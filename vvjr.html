@@ -190,7 +190,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
   </div>
 
   <div class="card" id="spojeCard" hidden>
-    <div class="head"><h2 id="nazev"></h2><span class="meta" id="pocet"></span></div>
+    <div class="head"><h2 id="nazev"></h2><span class="meta"><span id="pocet"></span> <button class="link" id="upravitObeh" hidden>✎ Upravit</button></span></div>
     <div class="tsub" id="obehLive"></div>
     <label class="all"><input type="checkbox" id="vse"> Označit vše</label>
     <div id="spoje"></div>
@@ -244,10 +244,17 @@ button.primary:disabled { opacity: .4; cursor: default; }
     <div class="card">
       <div class="head"><h2>Vlastní oběhy</h2><button class="link" id="edNovy">+ nový oběh</button></div>
       <div id="edSeznam"><div class="empty">Načítám…</div></div>
+      <div class="tsub" style="margin:12px 0 4px">Upravit současný oběh</div>
+      <div class="tok">
+        <input type="text" id="edSoucasny" class="pole" list="edSoucasnyList" placeholder="např. 347/17" style="margin:0;flex:1" autocomplete="off">
+        <button class="sec" id="edSoucasnyBtn">Upravit</button>
+      </div>
+      <datalist id="edSoucasnyList"></datalist>
     </div>
 
     <div class="card">
       <div class="head"><h2 id="edTitul">Nový oběh</h2></div>
+      <div class="tsub" id="edPuvodniInfo" hidden style="margin-bottom:8px"></div>
       <input type="text" id="edNazev" class="pole" placeholder="Název oběhu, např. 347/101">
       <div class="tsub" style="margin-bottom:4px">Dny provozu</div>
       <div class="chips" id="edDny" style="margin:0 0 10px"></div>
@@ -353,7 +360,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-10-23.8';
+const APP_VERZE = '2026-10-23.9';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -890,7 +897,9 @@ if (typeof document !== 'undefined') (function () {
   let vlastniObehy = [];   // [{id, nazev, dny, maska, spoje:[snapshot]}]
   function vlozVlastniObehy() {
     if (!R) return;
-    R.obehy = R.obehy.filter((o) => !o.vlastni);
+    if (!R.obehyAuto) R.obehyAuto = R.obehy.filter((o) => !o.vlastni);
+    const nahrazene = new Set(vlastniObehy.filter((v) => v.puvodniNazev).map((v) => `${v.puvodniNazev}|${v.puvodniDny}`));
+    R.obehy = R.obehyAuto.filter((o) => !nahrazene.has(`${o.o}|${o.d}`));
     for (const v of vlastniObehy) {
       const tids = v.spoje.map((sp, i) => {
         const id = sp.tid || `v:${v.id}:${i}`;
@@ -899,7 +908,7 @@ if (typeof document !== 'undefined') (function () {
       });
       const [kmen, ...zb] = String(v.nazev).split('/');
       R.obehy.push({ o: v.nazev, kmen, poradi: zb.join('/') || '', s: tids, d: v.dny, maska: v.maska || Array(7).fill(true),
-        data: new Set([0, 1, 2, 3, 4, 5, 6]), prvni: 0, dopravci: [], vlastni: v.id });
+        data: new Set([0, 1, 2, 3, 4, 5, 6]), prvni: 0, dopravci: [], vlastni: v.id, uprava: !!v.puvodniNazev });
     }
     indexujObehy();
     if (obeh && obeh.vlastni) vyber();
@@ -920,6 +929,14 @@ if (typeof document !== 'undefined') (function () {
     $('tabBtnSprava').addEventListener('click', () => prepniZalozku('sprava'));
     $('tabBtnEditor').addEventListener('click', () => prepniZalozku('editor'));
     $('edNovy').addEventListener('click', edNovy);
+    $('edSoucasnyBtn').addEventListener('click', edSoucasnyZVyberu);
+    $('edSoucasny').addEventListener('keydown', (e) => { if (e.key === 'Enter') edSoucasnyZVyberu(); });
+    $('upravitObeh').addEventListener('click', () => {
+      if (!obeh || !jeEditor()) return;
+      const o = obeh;
+      prepniZalozku('editor');
+      if (o.vlastni) edUpravit(o.vlastni); else edUpravitSoucasny(o);
+    });
     $('edZrusit').addEventListener('click', () => { if (!ed.spoje.length || confirm('Zahodit rozpracovaný oběh?')) edNovy(); });
     $('edUlozit').addEventListener('click', edUlozit);
     $('edNacist').addEventListener('click', edNactiLinku);
@@ -1233,7 +1250,7 @@ if (typeof document !== 'undefined') (function () {
   }
 
   /* ---------- editor oběhů (právo Editor / Správce) ---------- */
-  const ed = { id: null, spoje: [], maska: [true, true, true, true, true, false, false], linky: {}, routes: null, zastavky: null,
+  const ed = { id: null, puvodni: null, spoje: [], maska: [true, true, true, true, true, false, false], linky: {}, routes: null, zastavky: null,
     mode: 'linka', vlId: '', vlZast: [] };
   const novyId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const casNaMin = (v) => { const m = /^(\d{1,2}):(\d{2})/.exec(v || ''); return m ? +m[1] * 60 + +m[2] : null; };
@@ -1244,7 +1261,8 @@ if (typeof document !== 'undefined') (function () {
       const { F, db } = cloud.fb;
       const [os, ls_] = await Promise.all([F.getDocs(F.collection(db, 'obehy')), F.getDocs(F.collection(db, 'linky'))]);
       const out = [];
-      os.forEach((d) => { const x = d.data(); try { out.push({ id: d.id, nazev: x.nazev, dny: x.dny, maska: x.maska, autor: x.autor, spoje: JSON.parse(x.spojeJson || '[]') }); } catch {} });
+      os.forEach((d) => { const x = d.data(); try { out.push({ id: d.id, nazev: x.nazev, dny: x.dny, maska: x.maska, autor: x.autor,
+        puvodniNazev: x.puvodniNazev || '', puvodniDny: x.puvodniDny || '', spoje: JSON.parse(x.spojeJson || '[]') }); } catch {} });
       vlastniObehy = out.sort((a, b) => prirozene(a.nazev, b.nazev));
       ed.linky = {};
       ls_.forEach((d) => { ed.linky[d.id] = { id: d.id, ...d.data() }; });
@@ -1253,8 +1271,34 @@ if (typeof document !== 'undefined') (function () {
     } catch { /* bez práv nebo bez sítě */ }
   }
 
+  // současný oběh z turnusů -> do editoru (když už úpravu má, otevře se ta)
+  function edUpravitSoucasny(o) {
+    const existujici = vlastniObehy.find((v) => v.puvodniNazev === o.o && v.puvodniDny === o.d);
+    if (existujici) { edUpravit(existujici.id); return; }
+    ed.id = null; ed.puvodni = { o: o.o, d: o.d };
+    ed.spoje = o.s.map((tid) => { const x = R.spoje[tid]; return { tid, linka: x.linka, z: x.z, odj: x.odj, do: x.do, prij: x.prij, t: x.t || [] }; });
+    ed.maska = (o.maska || Array(7).fill(true)).slice();
+    $('edNazev').value = o.o; edKresliDny(); edKresliVybrane(); edKresliSpojeLinky();
+    // rovnou nabídnout spoje první linky oběhu, ať jde přidávat
+    const prvni = ed.spoje[0];
+    if (prvni && gtfsBlob) { $('edLinka').value = prvni.linka; edPrepniMode('linka'); edNactiLinku(); }
+    $('edNazev').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  function edSoucasnyZVyberu() {
+    if (!R) { toast('Jízdní řády se ještě načítají'); return; }
+    const t = $('edSoucasny').value.trim();
+    const m = /^(.+?)\s*\((.+)\)\s*$/.exec(t);
+    const nazev = (m ? m[1] : t).toUpperCase().replace(/\s+/g, '/'), dny = m ? m[2] : null;
+    const kand = (R.obehyAuto || R.obehy).filter((o) => !o.vlastni && o.o.toUpperCase() === nazev && (!dny || o.d === dny));
+    if (!kand.length) { toast('Takový oběh v turnusech není'); return; }
+    edUpravitSoucasny(kand.find((o) => o.data.has(0)) || kand[0]);
+    $('edSoucasny').value = '';
+  }
+
   function edOtevri() {
     $('edDatum').value ||= dnesIso();
+    if (R) $('edSoucasnyList').innerHTML = (R.obehyAuto || R.obehy).filter((o) => !o.vlastni)
+      .map((o) => `<option value="${esc(o.o)} (${esc(o.d)})">`).join('');
     edKresliDny(); edKresliSeznam(); edKresliVybrane(); edKresliVlastniVyber();
     if (gtfsBlob && !ed.routes) edNactiRoutes();
     nactiVlastniObehy();
@@ -1263,7 +1307,7 @@ if (typeof document !== 'undefined') (function () {
   function edKresliSeznam() {
     $('edSeznam').innerHTML = vlastniObehy.length ? vlastniObehy.map((v) => `<div class="prow">
         <div class="info"><b>${esc(v.nazev)}</b> <span class="tsub">(${esc(v.dny)})</span>
-          <div class="tsub">${v.spoje.length} spojů${v.autor ? ' · ' + esc(v.autor) : ''}</div></div>
+          <div class="tsub">${v.puvodniNazev ? `úprava ${esc(v.puvodniNazev)} (${esc(v.puvodniDny)}) · ` : ''}${v.spoje.length} spojů${v.autor ? ' · ' + esc(v.autor) : ''}</div></div>
         <button class="ed" data-id="${esc(v.id)}" aria-label="Upravit">✎</button>
         <button class="x" data-id="${esc(v.id)}" aria-label="Smazat">×</button></div>`).join('')
       : '<div class="empty">Zatím žádné vlastní oběhy.</div>';
@@ -1278,7 +1322,9 @@ if (typeof document !== 'undefined') (function () {
 
   function edKresliVybrane() {
     ed.spoje.sort((a, b) => a.odj - b.odj);
-    $('edTitul').textContent = ed.id ? 'Úprava oběhu' : 'Nový oběh';
+    $('edTitul').textContent = ed.puvodni ? 'Úprava současného oběhu' : ed.id ? 'Úprava oběhu' : 'Nový oběh';
+    $('edPuvodniInfo').hidden = !ed.puvodni;
+    if (ed.puvodni) $('edPuvodniInfo').textContent = `Po uložení nahradí oběh ${ed.puvodni.o} (${ed.puvodni.d}) z turnusů. Smazáním úpravy se vrátí původní.`;
     $('edPocet').textContent = ed.spoje.length ? `${ed.spoje.length} spojů v oběhu` : 'Zatím žádné spoje – přidejte je níže';
     $('edVybrane').innerHTML = ed.spoje.map((sp, i) => `<div class="edrow">
         <span class="ln">${esc(sp.linka)}</span>
@@ -1288,13 +1334,14 @@ if (typeof document !== 'undefined') (function () {
   }
 
   function edNovy() {
-    ed.id = null; ed.spoje = []; ed.maska = [true, true, true, true, true, false, false];
+    ed.id = null; ed.puvodni = null; ed.spoje = []; ed.maska = [true, true, true, true, true, false, false];
     $('edNazev').value = ''; edKresliDny(); edKresliVybrane(); edKresliSpojeLinky();
   }
   function edUpravit(id) {
     const v = vlastniObehy.find((x) => x.id === id);
     if (!v) return;
     ed.id = id; ed.spoje = v.spoje.map((x) => ({ ...x })); ed.maska = (v.maska || Array(7).fill(true)).slice();
+    ed.puvodni = v.puvodniNazev ? { o: v.puvodniNazev, d: v.puvodniDny } : null;
     $('edNazev').value = v.nazev; edKresliDny(); edKresliVybrane(); edKresliSpojeLinky();
     $('edNazev').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
@@ -1306,7 +1353,7 @@ if (typeof document !== 'undefined') (function () {
       await F.deleteDoc(F.doc(db, 'obehy', id));
       vlastniObehy = vlastniObehy.filter((x) => x.id !== id);
       if (ed.id === id) edNovy();
-      vlozVlastniObehy(); edKresliSeznam(); toast('Oběh smazán');
+      vlozVlastniObehy(); edKresliSeznam(); toast(v.puvodniNazev ? `Úprava smazána – platí zase původní ${v.puvodniNazev}` : 'Oběh smazán');
     } catch (e) { toast(`Nepodařilo se smazat (${e.code || e.message})`); }
   }
   async function edUlozit() {
@@ -1316,6 +1363,7 @@ if (typeof document !== 'undefined') (function () {
     if (!ed.maska.some(Boolean)) { toast('Vyberte aspoň jeden den'); return; }
     const id = ed.id || novyId();
     const data = { nazev, dny: popisDnu(ed.maska), maska: ed.maska, spojeJson: JSON.stringify(ed.spoje),
+      puvodniNazev: ed.puvodni ? ed.puvodni.o : '', puvodniDny: ed.puvodni ? ed.puvodni.d : '',
       autor: cloud.jmeno, autorUid: cloud.user.uid, cas: cloud.fb.F.serverTimestamp() };
     try {
       const { F, db } = cloud.fb;
@@ -1747,6 +1795,7 @@ if (typeof document !== 'undefined') (function () {
     const S = R.spoje;
     $('spojeCard').hidden = false;
     $('nazev').textContent = `Oběh PID ${obeh.o} (${obeh.d})${obeh.vlastni ? ' ✎' : ''}`;
+    $('upravitObeh').hidden = !jeEditor();
     $('pocet').textContent = `${obeh.s.length} spojů`;
     const lo = live && live.obeh[obeh.o.toUpperCase()];
     const proc = live && live.dohledano[obeh.o.toUpperCase()];
