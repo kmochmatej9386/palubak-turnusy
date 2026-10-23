@@ -102,6 +102,11 @@ input.pole { width: 100%; font-size: 16px; padding: 10px 12px; border-radius: 10
 .prow:last-child { border-bottom: 0; }
 .prow .evc { font-weight: 700; font-size: 17px; min-width: 3.5em; font-variant-numeric: tabular-nums; }
 .prow .info { flex: 1; min-width: 0; }
+.urow { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 0;
+  border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.urow:last-child { border-bottom: 0; }
+.urow b { font-size: 16px; }
+.prow .ed { background: none; border: 0; color: var(--muted); font-size: 16px; cursor: pointer; padding: 4px 6px; }
 .prow .x { background: none; border: 0; color: var(--muted); font-size: 20px; cursor: pointer; padding: 4px 8px; }
 .vcard { margin-top: 10px; padding: 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
 .vcard .evc { font-size: 22px; font-weight: 700; }
@@ -137,6 +142,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
   <nav class="tabs" role="tablist">
     <button role="tab" id="tabBtnVvjr" aria-selected="true">VVJŘ</button>
     <button role="tab" id="tabBtnProjeti" aria-selected="false">Projetí vozu</button>
+    <button role="tab" id="tabBtnSprava" aria-selected="false" hidden>Správa</button>
   </nav>
 
   <section id="tabVvjr">
@@ -221,6 +227,30 @@ button.primary:disabled { opacity: .4; cursor: default; }
     </div>
   </section>
 
+  <section id="tabSprava" hidden>
+    <div class="card">
+      <div class="head"><h2>Golemio token pro všechny</h2></div>
+      <p class="tsub" style="margin:0 0 10px">Přihlášení uživatelé dostanou token automaticky, nemusí nic zadávat. Lidé bez účtu ho nevidí.</p>
+      <div class="tsub" id="spravaTokenStav" style="margin-bottom:8px"></div>
+      <div class="tok"><button class="primary" id="spravaSdilet" style="flex:1">Sdílet můj token</button>
+        <button class="sec" id="spravaNesdilet">Přestat sdílet</button></div>
+    </div>
+    <div class="card">
+      <div class="head"><h2>Uživatelé</h2><button class="link" id="spravaObnovit">obnovit</button></div>
+      <div id="spravaUzivatele"><div class="empty">Načítám…</div></div>
+    </div>
+    <div class="card" id="spravaDetail" hidden>
+      <div class="head"><h2 id="spravaDetailNazev"></h2><button class="link" id="spravaZpet">zavřít</button></div>
+      <div class="tok" style="margin-bottom:6px">
+        <input type="text" id="spravaNoveEvc" class="pole" placeholder="Ev. č." style="margin:0;flex:1" inputmode="numeric">
+        <input type="text" id="spravaNovyDopr" class="pole" placeholder="Dopravce" list="dopravciList2" style="margin:0;flex:2">
+      </div>
+      <datalist id="dopravciList2"></datalist>
+      <button class="sec" id="spravaPridat" style="width:100%;margin-bottom:8px">Přidat vůz uživateli</button>
+      <div id="spravaSeznam"></div>
+    </div>
+  </section>
+
   <div class="card">
     <div class="golemio">
       <label class="big" for="golemioToken" style="font-size:14px">Golemio token</label>
@@ -245,7 +275,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-10-23.5';
+const APP_VERZE = '2026-10-23.6';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -255,7 +285,8 @@ const FIREBASE_CONFIG = {
   messagingSenderId: '751523032760',
   appId: '1:751523032760:web:dd33093a4f6be51b1a0e4d',
 };
-const FB_VERZE = '10.12.2';   // při každé úpravě zvýšit – podle toho aplikace pozná novou verzi
+const FB_VERZE = '10.12.2';
+const SPRAVCE_EMAIL = 'matej_sucs@vvjr-pid.app';   // účet Matěj_SUCS = správce   // při každé úpravě zvýšit – podle toho aplikace pozná novou verzi
 const RAW = 'https://raw.githubusercontent.com/kmochmatej9386/palubak-turnusy/main/';
 const TURNUSY_URL = RAW + 'turnusy.json';
 const SA_URL = (evc) => `https://seznam-autobusu.cz/seznam?evcspz=${encodeURIComponent(evc)}&zapujcka=2`;
@@ -565,6 +596,9 @@ if (typeof document !== 'undefined') (function () {
     if (frac != null) $('prubeh').value = frac;
   }
 
+  // vlastní token má přednost, jinak sdílený token správce (z Firebase, jen pro přihlášené)
+  const tokenGolemio = () => ls.get('golemioToken') || ls.get('golemioSdileny') || '';
+
   async function nactiTurnusy() {
     stav('Stahuji turnusy z GitHubu…');
     const r = await fetch(TURNUSY_URL, { cache: 'no-cache' });
@@ -573,8 +607,8 @@ if (typeof document !== 'undefined') (function () {
   }
 
   async function nactiGolemio() {
-    const token = ls.get('golemioToken');
-    if (!token) { live = null; $('golemioStav').textContent = 'Bez tokenu – číslo vozu a dopravce se nedoplní.'; obnovObeh(); return; }
+    const token = tokenGolemio();
+    if (!token) { live = null; $('golemioStav').textContent = 'Bez tokenu – po přihlášení (záložka Projetí vozu) se doplní sám.'; obnovObeh(); return; }
     $('golemioStav').textContent = 'Načítám vozidla z Golemia…';
     try {
       // Golemio vrací 400, když se mu nelíbí parametry -> zkoušet postupně jednodušší dotazy (jako collect.mjs)
@@ -636,7 +670,7 @@ if (typeof document !== 'undefined') (function () {
   // u všech dnešních spojů oběhu, které už vyjely, zjistit vůz přes /vehiclepositions/{trip_id}
   // (když se vůz během dne vymění, uvidíte to u spojů)
   async function dohledejVuz(o) {
-    const token = ls.get('golemioToken');
+    const token = tokenGolemio();
     const L = live, klic = o.o.toUpperCase();
     if (!token || !L || L.dohledano[klic]) return;
     L.hist ||= {};
@@ -745,6 +779,12 @@ if (typeof document !== 'undefined') (function () {
     $('projetiFiltr').addEventListener('change', () => { ls.set('projetiFiltr', $('projetiFiltr').value); kresliProjete(); });
     $('projetiExport').addEventListener('click', exportProjete);
     $('projetiImport').addEventListener('change', (e) => { if (e.target.files[0]) importProjete(e.target.files[0]); e.target.value = ''; });
+    $('tabBtnSprava').addEventListener('click', () => prepniZalozku('sprava'));
+    $('spravaObnovit').addEventListener('click', nactiSpravu);
+    $('spravaZpet').addEventListener('click', () => { spravaVybrany = null; $('spravaDetail').hidden = true; });
+    $('spravaPridat').addEventListener('click', spravaPridat);
+    $('spravaSdilet').addEventListener('click', () => spravaSdilet(true));
+    $('spravaNesdilet').addEventListener('click', () => { if (confirm('Přestat sdílet token? Ostatním přestanou fungovat čísla vozů.')) spravaSdilet(false); });
     $('uctPrihlasit').addEventListener('click', () => uctAkce(false));
     $('uctRegistrovat').addEventListener('click', () => uctAkce(true));
     $('uctHeslo').addEventListener('keydown', (e) => { if (e.key === 'Enter') uctAkce(false); });
@@ -770,6 +810,7 @@ if (typeof document !== 'undefined') (function () {
     $('obnovGtfs').addEventListener('click', () => bezpecne(async () => { const b = await ziskejGtfs(true); if (b) await spust(b); }));
     $('hledat').value = new URLSearchParams(location.search).get('obeh') || ls.get('obeh') || '';
     $('golemioToken').value = ls.get('golemioToken') || '';
+    if (!ls.get('golemioToken') && ls.get('golemioSdileny')) $('golemioToken').placeholder = 'Používá se sdílený token';
     $('golemioUlozit').addEventListener('click', () => { ls.set('golemioToken', $('golemioToken').value.trim()); nactiGolemio(); });
     $('golemioObnov').addEventListener('click', nactiGolemio);
     nactiGolemio();
@@ -884,12 +925,16 @@ if (typeof document !== 'undefined') (function () {
 
   /* ---------- záložky ---------- */
   function prepniZalozku(k) {
+    if (k === 'sprava' && !jeSpravce()) k = 'projeti';
     const vv = k === 'vvjr';
-    $('tabVvjr').hidden = !vv; $('tabProjeti').hidden = vv;
-    $('tabBtnVvjr').setAttribute('aria-selected', vv); $('tabBtnProjeti').setAttribute('aria-selected', !vv);
+    $('tabVvjr').hidden = !vv; $('tabProjeti').hidden = k !== 'projeti'; $('tabSprava').hidden = k !== 'sprava';
+    $('tabBtnVvjr').setAttribute('aria-selected', vv);
+    $('tabBtnProjeti').setAttribute('aria-selected', k === 'projeti');
+    $('tabBtnSprava').setAttribute('aria-selected', k === 'sprava');
     document.querySelector('.bar').hidden = !vv;
     ls.set('zalozka', k);
-    if (!vv) { kresliProjete(); hledejProjeti(); }
+    if (k === 'projeti') { kresliProjete(); hledejProjeti(); }
+    if (k === 'sprava') nactiSpravu();
   }
 
   /* ---------- projetí vozu ---------- */
@@ -918,7 +963,22 @@ if (typeof document !== 'undefined') (function () {
     $('uctNenastaveno').hidden = nastaveno;
     $('uctOdhlasen').hidden = !nastaveno || !!cloud.user;
     $('uctPrihlasen').hidden = !cloud.user;
-    $('uctJmeno').textContent = cloud.jmeno;
+    $('uctJmeno').textContent = cloud.jmeno + (jeSpravce() ? ' (správce)' : '');
+    $('tabBtnSprava').hidden = !jeSpravce();
+    if (!jeSpravce() && !$('tabSprava').hidden) prepniZalozku('projeti');
+  }
+  const jeSpravce = () => !!(cloud.user && cloud.user.email === SPRAVCE_EMAIL);
+
+  async function nactiSdilenyToken() {
+    try {
+      const { F, db } = cloud.fb;
+      const d = await F.getDoc(F.doc(db, 'nastaveni', 'golemio'));
+      const t = d.exists() ? (d.data().token || '') : '';
+      const predtim = tokenGolemio();
+      if (t) ls.set('golemioSdileny', t); else try { localStorage.removeItem('golemioSdileny'); } catch {}
+      if (!ls.get('golemioToken')) $('golemioToken').placeholder = t ? 'Používá se sdílený token' : 'Golemio API token';
+      if (tokenGolemio() !== predtim) nactiGolemio();
+    } catch {}
   }
 
   async function initCloud() {
@@ -939,8 +999,10 @@ if (typeof document !== 'undefined') (function () {
     cloud.user = u || null;
     if (!u) {
       cloud.jmeno = ''; projete = nactiJson('projete', {});
+      if (ls.get('golemioSdileny')) { try { localStorage.removeItem('golemioSdileny'); } catch {} nactiGolemio(); }
       kresliUcet(); kresliProjete(); hledejProjeti(); return;
     }
+    nactiSdilenyToken();
     cloud.jmeno = u.displayName || cloud.jmeno || u.email.split('@')[0];
     projete = nactiJson(klicProjete(), {});           // hned z paměti telefonu, pak aktualizace ze serveru
     kresliUcet(); kresliProjete(); hledejProjeti();
@@ -994,6 +1056,109 @@ if (typeof document !== 'undefined') (function () {
     const out = [];
     snap.forEach((d) => { const x = d.data(); if (x.uid !== cloud.user.uid) out.push(x); });
     return out.sort((a, b) => String(a.datum).localeCompare(String(b.datum)));
+  }
+
+  /* ---------- správa (jen účet správce) ---------- */
+  let sprava = { uzivatele: {}, projeti: {} };   // uid -> {prezdivka}, uid -> {evc: data}
+  let spravaVybrany = null;
+
+  async function nactiSpravu() {
+    if (!jeSpravce()) return;
+    const { F, db } = cloud.fb;
+    $('spravaTokenStav').textContent = ls.get('golemioSdileny')
+      ? (ls.get('golemioSdileny') === ls.get('golemioToken') ? 'Sdílí se váš token.' : 'Sdílí se token (jiný než váš současný).')
+      : 'Token se zatím nesdílí.';
+    try {
+      const [us, ps] = await Promise.all([F.getDocs(F.collection(db, 'uzivatele')), F.getDocs(F.collection(db, 'projeti'))]);
+      sprava = { uzivatele: {}, projeti: {} };
+      us.forEach((d) => { sprava.uzivatele[d.id] = d.data(); });
+      ps.forEach((d) => {
+        const x = d.data();
+        (sprava.projeti[x.uid] ||= {})[x.evc] = x;
+        if (!sprava.uzivatele[x.uid]) sprava.uzivatele[x.uid] = { prezdivka: x.prezdivka || '?' };
+      });
+      kresliSpravu();
+    } catch (e) { $('spravaUzivatele').innerHTML = `<div class="err">Nepodařilo se načíst (${esc(e.code || e.message)}). Máte ve Firebase nová pravidla?</div>`; }
+  }
+
+  function kresliSpravu() {
+    const radky = Object.entries(sprava.uzivatele)
+      .map(([uid, u]) => [uid, u.prezdivka || '?', Object.keys(sprava.projeti[uid] || {}).length])
+      .sort((a, b) => b[2] - a[2] || a[1].localeCompare(b[1], 'cs'));
+    $('spravaUzivatele').innerHTML = radky.length ? radky.map(([uid, jm, n]) =>
+      `<button class="urow" data-uid="${esc(uid)}"><b>${esc(jm)}</b><span class="tsub">${pocetVozu(n)} ›</span></button>`).join('')
+      : '<div class="empty">Zatím žádní uživatelé.</div>';
+    $('spravaUzivatele').querySelectorAll('.urow').forEach((b) => b.addEventListener('click', () => { spravaVybrany = b.dataset.uid; kresliSpravaDetail(); $('spravaDetail').scrollIntoView({ behavior: 'smooth' }); }));
+    if (spravaVybrany) kresliSpravaDetail();
+  }
+
+  function kresliSpravaDetail() {
+    const uid = spravaVybrany, u = sprava.uzivatele[uid];
+    if (!u) { $('spravaDetail').hidden = true; return; }
+    const vozy = Object.values(sprava.projeti[uid] || {}).sort((a, b) => evcSort(a.evc, b.evc));
+    $('spravaDetail').hidden = false;
+    $('spravaDetailNazev').textContent = `${u.prezdivka || '?'} – ${pocetVozu(vozy.length)}`;
+    $('dopravciList2').innerHTML = [...new Set([...Object.values(zname), ...Object.values(sprava.projeti).flatMap((m) => Object.values(m).map((x) => x.dopravce))].filter(Boolean))]
+      .sort().map((d) => `<option value="${esc(d)}">`).join('');
+    $('spravaSeznam').innerHTML = vozy.length ? vozy.map((x) => `<div class="prow">
+        <a class="evc link" href="${esc(SA_URL(x.evc))}" target="_blank" rel="noopener">${esc(x.evc)}</a>
+        <div class="info">${esc(x.dopravce || 'neznámý dopravce')}<div class="tsub">${esc(datumIso(x.datum))}${x.obeh ? ' · oběh ' + esc(x.obeh) : ''}</div></div>
+        <button class="ed" data-evc="${esc(x.evc)}" aria-label="Upravit">✎</button>
+        <button class="x" data-evc="${esc(x.evc)}" aria-label="Smazat">×</button></div>`).join('')
+      : '<div class="empty">Žádné projeté vozy.</div>';
+    $('spravaSeznam').querySelectorAll('.x').forEach((b) => b.addEventListener('click', () => spravaSmaz(uid, b.dataset.evc)));
+    $('spravaSeznam').querySelectorAll('.ed').forEach((b) => b.addEventListener('click', () => spravaUprav(uid, b.dataset.evc)));
+  }
+
+  async function spravaZapis(uid, evc, data) {
+    const { F, db } = cloud.fb;
+    const zaznam = { evc, uid, prezdivka: sprava.uzivatele[uid]?.prezdivka || '', dopravce: data.dopravce || '',
+      datum: data.datum || dnesIso(), obeh: data.obeh || '', cas: F.serverTimestamp() };
+    await F.setDoc(F.doc(db, 'projeti', `${evc}_${uid}`), zaznam);
+    (sprava.projeti[uid] ||= {})[evc] = zaznam;
+    if (cloud.user && uid === cloud.user.uid) { projete[evc] = { d: zaznam.dopravce, t: zaznam.datum, o: zaznam.obeh }; ulozProjete(); kresliProjete(); }
+    kresliSpravu();
+  }
+  async function spravaSmaz(uid, evc) {
+    if (!confirm(`Smazat vůz ${evc} uživateli ${sprava.uzivatele[uid]?.prezdivka}?`)) return;
+    try {
+      const { F, db } = cloud.fb;
+      await F.deleteDoc(F.doc(db, 'projeti', `${evc}_${uid}`));
+      delete sprava.projeti[uid][evc];
+      if (cloud.user && uid === cloud.user.uid) { delete projete[evc]; ulozProjete(); kresliProjete(); }
+      kresliSpravu();
+    } catch (e) { toast(`Nepodařilo se smazat (${e.code || e.message})`); }
+  }
+  async function spravaUprav(uid, evc) {
+    const x = sprava.projeti[uid][evc];
+    const dopr = prompt(`Dopravce u vozu ${evc}:`, x.dopravce || '');
+    if (dopr === null) return;
+    const dat = prompt('Datum projetí (RRRR-MM-DD):', x.datum || dnesIso());
+    if (dat === null) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dat.trim())) { toast('Datum musí být ve tvaru RRRR-MM-DD'); return; }
+    try { await spravaZapis(uid, evc, { ...x, dopravce: dopr.trim(), datum: dat.trim() }); toast('Uloženo'); }
+    catch (e) { toast(`Nepodařilo se uložit (${e.code || e.message})`); }
+  }
+  async function spravaPridat() {
+    const evc = normEvc($('spravaNoveEvc').value);
+    if (!evc || !spravaVybrany) return;
+    if (sprava.projeti[spravaVybrany]?.[evc]) { toast('Tento vůz už uživatel má'); return; }
+    try {
+      await spravaZapis(spravaVybrany, evc, { dopravce: $('spravaNovyDopr').value.trim() || zname[evc] || '' });
+      $('spravaNoveEvc').value = ''; $('spravaNovyDopr').value = '';
+      toast(`Přidáno · ${pocetVozu(Object.keys(sprava.projeti[spravaVybrany]).length)}`);
+    } catch (e) { toast(`Nepodařilo se uložit (${e.code || e.message})`); }
+  }
+  async function spravaSdilet(sdilet) {
+    const t = ls.get('golemioToken');
+    if (sdilet && !t) { toast('Nejdřív zadejte svůj Golemio token dole'); return; }
+    try {
+      const { F, db } = cloud.fb;
+      await F.setDoc(F.doc(db, 'nastaveni', 'golemio'), { token: sdilet ? t : '', zmeneno: F.serverTimestamp() });
+      if (sdilet) ls.set('golemioSdileny', t); else try { localStorage.removeItem('golemioSdileny'); } catch {}
+      toast(sdilet ? 'Token se sdílí se všemi přihlášenými' : 'Sdílení tokenu vypnuto');
+      nactiSpravu();
+    } catch (e) { toast(`Nepodařilo se uložit (${e.code || e.message}). Máte ve Firebase nová pravidla?`); }
   }
 
   async function uctAkce(registrace) {
@@ -1158,7 +1323,7 @@ if (typeof document !== 'undefined') (function () {
     const lo = live && live.obeh[obeh.o.toUpperCase()];
     const proc = live && live.dohledano[obeh.o.toUpperCase()];
     const odkazVozu = (v) => `<a class="link" href="${esc(SA_URL(v))}" target="_blank" rel="noopener">${esc(v)}</a>`;
-    $('obehLive').innerHTML = !live ? (ls.get('golemioToken') ? 'Vůz a dopravce: Golemio nenačteno (viz chyba dole u tokenu)' : '') : lo
+    $('obehLive').innerHTML = !live ? (tokenGolemio() ? 'Vůz a dopravce: Golemio nenačteno (viz chyba dole u tokenu)' : '') : lo
       ? `${esc(lo.zdroj ? 'Naposledy (' + lo.zdroj + ')' : 'Teď v provozu')}: ${lo.vozy.length ? 'vůz ' + lo.vozy.map(odkazVozu).join(', ') : 'číslo vozu neznámé'}${lo.dopravci.length ? ' · ' + esc(lo.dopravci.join(', ')) : ''}`
       : esc(`Vůz a dopravce: ${proc || 'oběh teď nejede'}`);
     if (live && lo && proc === 'hledám…') $('obehLive').innerHTML += ' · <span>dohledávám vozy u spojů…</span>';
