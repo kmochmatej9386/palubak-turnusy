@@ -330,6 +330,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
         <input type="text" id="spravaNoveEvc" class="pole" placeholder="Ev. č." style="margin:0;flex:1" inputmode="numeric">
         <input type="text" id="spravaNovyDopr" class="pole" placeholder="Dopravce" list="dopravciList2" style="margin:0;flex:2">
       </div>
+      <select id="spravaNovaTrakce" style="margin-bottom:6px"><option value="">Autobus</option><option value="T">Tramvaj</option><option value="TB">Trolejbus</option></select>
       <datalist id="dopravciList2"></datalist>
       <button class="sec" id="spravaPridat" style="width:100%;margin-bottom:8px">Přidat vůz uživateli</button>
       <div id="spravaSeznam"></div>
@@ -360,7 +361,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-10-23.10';
+const APP_VERZE = '2026-10-23.12';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -626,14 +627,33 @@ async function spojeLinky(blob, linka, datumD) {
 
 /* ====================== text VVJŘ ====================== */
 // živá data z Golemia: číslo vozu a dopravce podle oběhu (kmenová linka/pořadí) i podle spoje
+// trakce vozu: '' = autobus (klíč je samotné ev. č., kvůli starším záznamům), 'T' = tramvaj, 'TB' = trolejbus
+const TRAKCE = { '': 'Autobus', T: 'Tramvaj', TB: 'Trolejbus' };
+const klicVozu = (c, t) => (t ? `${c}~${t}` : String(c));
+const rozlozKlic = (k) => { const [c, t = ''] = String(k).split('~'); return { c, t: TRAKCE[t] ? t : '' }; };
+const popisKlice = (k) => { const { c, t } = rozlozKlic(k); return t ? `${c} (${TRAKCE[t].toLowerCase()})` : c; };
+function trakceZGolemia(p, t, g) {
+  const vt = t.vehicle_type || p.vehicle_type || {};
+  const txt = `${typeof vt === 'string' ? vt : (vt.description_cs || '') + ' ' + (vt.description_en || '')}`.toLowerCase();
+  if (/trolej|trolley/.test(txt)) return 'TB';
+  if (/tram/.test(txt)) return 'T';
+  if (/bus/.test(txt)) return '';
+  const rt = g.route_type ?? (typeof vt === 'object' ? vt.id : undefined);
+  if (rt === 0 || rt === '0') return 'T';
+  if (rt === 11 || rt === '11') return 'TB';
+  if (rt === 3 || rt === '3') return '';
+  return null;   // neznámá
+}
+
 function zpracujGolemio(features) {
-  const live = { obeh: {}, trip: {}, pocet: 0 };
+  const live = { obeh: {}, trip: {}, pocet: 0, raw: {} };
   for (const f of features) {
     const p = f.properties || {}, t = p.trip || {}, g = t.gtfs || {};
     const vuz = t.vehicle_registration_number ?? p.vehicle_registration_number ?? (p.vehicle || {}).registration_number;
     const ag = t.agency_name;
     const dopravce = typeof ag === 'string' ? ag : (ag && (ag.real || ag.scheduled)) || '';
-    if (g.trip_id && (vuz != null || dopravce)) live.trip[g.trip_id] = [vuz == null ? '' : String(vuz), dopravce];
+    if (g.trip_id && (vuz != null || dopravce)) live.trip[g.trip_id] = [vuz == null ? '' : String(vuz), dopravce, trakceZGolemia(p, t, g)];
+    if (vuz != null && !live.raw[String(vuz)]) live.raw[String(vuz)] = f;   // surová data vozu (pro test typu vozu)
     if (t.sequence_id == null) continue;
     const kmen = t.origin_route_name ? String(t.origin_route_name)
       : String(g.route_short_name || (g.trip_id ? String(g.trip_id).split('_')[0] : ''));
@@ -1218,7 +1238,7 @@ if (typeof document !== 'undefined') (function () {
   }
 
   const idProjeti = (evc) => `${evc}_${cloud.user.uid}`;
-  const dataProjeti = (evc, p) => ({ evc, uid: cloud.user.uid, prezdivka: cloud.jmeno, dopravce: p.d || '', spz: p.s || '',
+  const dataProjeti = (evc, p) => ({ evc, cislo: rozlozKlic(evc).c, trakce: TRAKCE[rozlozKlic(evc).t], uid: cloud.user.uid, prezdivka: cloud.jmeno, dopravce: p.d || '', spz: p.s || '',
     datum: p.t || '', obeh: p.o || '', cas: cloud.fb.F.serverTimestamp() });
   async function cloudZapis(evc, p) {
     if (!cloud.user) return;
@@ -1561,8 +1581,8 @@ if (typeof document !== 'undefined') (function () {
     $('dopravciList2').innerHTML = [...new Set([...Object.values(zname), ...Object.values(sprava.projeti).flatMap((m) => Object.values(m).map((x) => x.dopravce))].filter(Boolean))]
       .sort().map((d) => `<option value="${esc(d)}">`).join('');
     $('spravaSeznam').innerHTML = vozy.length ? vozy.map((x) => `<div class="prow">
-        <a class="evc link" href="${esc(SA_URL(x.evc))}" target="_blank" rel="noopener">${esc(x.evc)}</a>
-        <div class="info">${esc(x.dopravce || 'neznámý dopravce')}<div class="tsub">${esc(datumIso(x.datum))}${x.obeh ? ' · oběh ' + esc(x.obeh) : ''}</div></div>
+        ${odkazKlice(x.evc)}
+        <div class="info">${esc(x.dopravce || 'neznámý dopravce')}${rozlozKlic(x.evc).t ? ` <span class="badge bad">${TRAKCE[rozlozKlic(x.evc).t].toLowerCase()}</span>` : ''}<div class="tsub">${esc(datumIso(x.datum))}${x.obeh ? ' · oběh ' + esc(x.obeh) : ''}</div></div>
         <button class="ed" data-evc="${esc(x.evc)}" aria-label="Upravit">✎</button>
         <button class="x" data-evc="${esc(x.evc)}" aria-label="Smazat">×</button></div>`).join('')
       : '<div class="empty">Žádné projeté vozy.</div>';
@@ -1572,7 +1592,7 @@ if (typeof document !== 'undefined') (function () {
 
   async function spravaZapis(uid, evc, data) {
     const { F, db } = cloud.fb;
-    const zaznam = { evc, uid, prezdivka: sprava.uzivatele[uid]?.prezdivka || '', dopravce: data.dopravce || '',
+    const zaznam = { evc, cislo: rozlozKlic(evc).c, trakce: TRAKCE[rozlozKlic(evc).t], uid, prezdivka: sprava.uzivatele[uid]?.prezdivka || '', dopravce: data.dopravce || '',
       datum: data.datum || dnesIso(), obeh: data.obeh || '', cas: F.serverTimestamp() };
     await F.setDoc(F.doc(db, 'projeti', `${evc}_${uid}`), zaznam);
     (sprava.projeti[uid] ||= {})[evc] = zaznam;
@@ -1580,7 +1600,7 @@ if (typeof document !== 'undefined') (function () {
     kresliSpravu();
   }
   async function spravaSmaz(uid, evc) {
-    if (!confirm(`Smazat vůz ${evc} uživateli ${sprava.uzivatele[uid]?.prezdivka}?`)) return;
+    if (!confirm(`Smazat vůz ${popisKlice(evc)} uživateli ${sprava.uzivatele[uid]?.prezdivka}?`)) return;
     try {
       const { F, db } = cloud.fb;
       await F.deleteDoc(F.doc(db, 'projeti', `${evc}_${uid}`));
@@ -1591,17 +1611,20 @@ if (typeof document !== 'undefined') (function () {
   }
   async function spravaUprav(uid, evc) {
     const x = sprava.projeti[uid][evc];
-    const dopr = prompt(`Dopravce u vozu ${evc}:`, x.dopravce || '');
+    const dopr = prompt(`Dopravce u vozu ${popisKlice(evc)}:`, x.dopravce || '');
     if (dopr === null) return;
     const dat = prompt('Datum projetí (RRRR-MM-DD):', x.datum || dnesIso());
     if (dat === null) return;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dat.trim())) { toast('Datum musí být ve tvaru RRRR-MM-DD'); return; }
-    try { await spravaZapis(uid, evc, { ...x, dopravce: dopr.trim(), datum: dat.trim() }); toast('Uloženo'); }
+    const ob = prompt('Oběh (nechte prázdné, když není):', x.obeh || '');
+    if (ob === null) return;
+    try { await spravaZapis(uid, evc, { ...x, dopravce: dopr.trim(), datum: dat.trim(), obeh: ob.trim().toUpperCase().replace(/\s+/g, '/') }); toast('Uloženo'); }
     catch (e) { toast(`Nepodařilo se uložit (${e.code || e.message})`); }
   }
   async function spravaPridat() {
-    const evc = normEvc($('spravaNoveEvc').value);
-    if (!evc || !spravaVybrany) return;
+    const cis = normEvc($('spravaNoveEvc').value);
+    if (!cis || !spravaVybrany) return;
+    const evc = klicVozu(cis, $('spravaNovaTrakce').value);
     if (sprava.projeti[spravaVybrany]?.[evc]) { toast('Tento vůz už uživatel má'); return; }
     try {
       await spravaZapis(spravaVybrany, evc, { dopravce: $('spravaNovyDopr').value.trim() || zname[evc] || '' });
@@ -1665,19 +1688,27 @@ if (typeof document !== 'undefined') (function () {
   function zapamatujVozy() {
     if (!live) return;
     let zmena = false;
-    for (const [v, d] of Object.values(live.trip)) {
-      if (v && d && zname[v] !== d) { zname[v] = d; zmena = true; }
+    for (const [v, d, tr] of Object.values(live.trip)) {
+      const k = klicVozu(v, tr || '');
+      if (v && d && zname[k] !== d) { zname[k] = d; zmena = true; }
     }
     if (zmena) ls.set('znameVozy', JSON.stringify(zname));
   }
 
   // kde vůz teď jezdí (podle Golemia)
-  function vuzVProvozu(evc) {
+  function vuzVProvozu(evc, trakce) {
     if (!live) return null;
-    for (const [tid, [v, d]] of Object.entries(live.trip)) {
-      if (normEvc(v) === evc) return { dopravce: d, obeh: klicObehu(tid), tid };
+    for (const [tid, [v, d, tr]] of Object.entries(live.trip)) {
+      if (normEvc(v) === evc && (trakce === undefined || tr == null || tr === trakce)) return { dopravce: d, obeh: klicObehu(tid), tid, trakce: tr };
     }
     return null;
+  }
+  // jaké trakce mají vozy s tímto číslem (Golemio, dřív viděné, projeté)
+  function trakceCisla(c) {
+    const out = new Set();
+    if (live) for (const [v, , tr] of Object.values(live.trip)) if (normEvc(v) === c && tr != null) out.add(tr);
+    for (const k of [...Object.keys(zname), ...Object.keys(projete), ...Object.keys(spzMapa)]) { const r = rozlozKlic(k); if (r.c === c) out.add(r.t); }
+    return out;
   }
 
   function toast(msg) {
@@ -1731,7 +1762,7 @@ if (typeof document !== 'undefined') (function () {
         try { evc = await cloudSpzHledej(spz); } catch {}
         if (normEvc($('projetiEvc').value) !== q) return;
       }
-      if (evc) { spzMapa[evc] = spz; ulozSpzMapu(); return kartaVozu(evc, spz); }
+      if (evc) { spzMapa[evc] = spz; ulozSpzMapu(); const r = rozlozKlic(evc); return kartaVozu(r.c, spz, r.t); }
       box.innerHTML = `<div class="vcard">
         <div class="evc">${esc(spz)}</div>
         <div class="tsub">Tuhle SPZ zatím nikdo nepřiřadil k vozu. Zadejte ev. č. – najdete ho na
@@ -1750,45 +1781,116 @@ if (typeof document !== 'undefined') (function () {
     kartaVozu(q, cekajiciSpz);
   }
 
+  // zkušebně: co Golemio o voze ví (hledáme typ / model vozu)
+  async function testGolemio(evc) {
+    const out = $('golemioTestOut');
+    const token = tokenGolemio();
+    const f = live && live.raw[evc];
+    if (!f || !token) return;
+    out.innerHTML = '<div class="tsub">Zkouším…</div>';
+    const hlavicky = { headers: { 'X-Access-Token': token } };
+    const vysl = [];
+    const zkus = async (popis, url) => {
+      try {
+        const r = await fetch(url, hlavicky);
+        const t = await r.text();
+        vysl.push(`### ${popis}\nGET ${url.replace(/^https:\/\/api\.golemio\.cz/, '')} -> HTTP ${r.status}\n${t.slice(0, 2500)}`);
+        try { return JSON.parse(t); } catch { return null; }
+      } catch (e) { vysl.push(`### ${popis}\n${url}\nCHYBA: ${e.message}`); return null; }
+    };
+    vysl.push('### Surová data z /v2/vehiclepositions\n' + JSON.stringify(f.properties, null, 1).slice(0, 3000));
+    const t = (f.properties || {}).trip || {}, g = t.gtfs || {};
+    const base = 'https://api.golemio.cz';
+    if (g.trip_id) await zkus('Detail spoje', `${base}/v2/vehiclepositions/${encodeURIComponent(g.trip_id)}?includePositions=false`);
+    // veřejné API mapy – seznam vozů linky, najít náš vůz a jeho detail
+    const seznam = await zkus('Veřejné API – vozy linky', `${base}/v2/public/vehiclepositions?routeShortName=${encodeURIComponent(g.route_short_name || '')}`);
+    let vid = null;
+    const prvky = (seznam && (seznam.features || seznam)) || [];
+    if (Array.isArray(prvky)) for (const x of prvky) {
+      const pp = x.properties || x;
+      const id = pp.vehicle_id || pp.id || '';
+      if (String(id).endsWith('-' + evc) || String(pp.registration_number || pp.vehicle_registration_number || '') === evc) { vid = id; break; }
+    }
+    if (vid) {
+      await zkus('Veřejné API – detail vozu', `${base}/v2/public/vehiclepositions/${encodeURIComponent(vid)}?scopes=info`);
+    } else {
+      for (const rt of [3, 0, 11]) {
+        const j = await zkus(`Veřejné API – detail service-${rt}-${evc}`, `${base}/v2/public/vehiclepositions/service-${rt}-${encodeURIComponent(evc)}?scopes=info`);
+        if (j && !j.error_message) break;
+      }
+    }
+    const text = vysl.join('\n\n');
+    out.innerHTML = `<pre style="max-height:300px;margin-top:8px;font-size:11px">${esc(text)}</pre>
+      <button class="sec" id="golemioTestKopirovat" style="width:100%;margin-top:6px">Zkopírovat výsledek</button>`;
+    $('golemioTestKopirovat').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(text); toast('Zkopírováno – pošlete mi to'); } catch { toast('Nepodařilo se zkopírovat'); }
+    });
+  }
+
   let kartaEvc = '';
-  function kartaVozu(evc, spzZadana) {
+  function kartaVozu(cislo, spzZadana, trakce) {
+    const typy = trakceCisla(cislo);
+    if (trakce === undefined) {
+      const projTyp = Object.keys(projete).map(rozlozKlic).filter((r) => r.c === cislo).map((r) => r.t);
+      const tedTyp = vuzVProvozu(cislo);
+      trakce = projTyp.length === 1 ? projTyp[0] : (tedTyp && tedTyp.trakce != null) ? tedTyp.trakce : typy.size === 1 ? [...typy][0] : '';
+    }
+    const evc = klicVozu(cislo, trakce);
     kartaEvc = evc;
     const box = $('projetiVysledek');
-    const ted = vuzVProvozu(evc);
+    const ted = vuzVProvozu(cislo, trakce);
     const p = projete[evc];
+    const duplicita = typy.size > 1;
     const dopravce = (p && p.d) || (ted && ted.dopravce) || zname[evc] || '';
     const spzVozu = spzZadana || (p && p.s) || spzMapa[evc] || '';
     const obehNazev = ted && ted.obeh ? ((R && R.obehy.find((x) => x.o.toUpperCase() === ted.obeh)) || { o: ted.obeh }).o : '';
     const stavVozu = ted ? `Teď v provozu${obehNazev ? ' · oběh ' + esc(obehNazev) : ''}`
       : zname[evc] ? 'Teď nejede (aplikace ho už dřív viděla)' : (live ? 'V datech Golemia teď není' : 'Golemio nenačteno – dopravce doplňte ručně');
     box.innerHTML = `<div class="vcard">
-      <div class="evc"><a class="link" href="${esc(SA_URL(evc))}" target="_blank" rel="noopener">${esc(evc)}</a>
+      <div class="evc">${trakce === 'T' ? esc(cislo) : `<a class="link" href="${esc(SA_URL(cislo))}" target="_blank" rel="noopener">${esc(cislo)}</a>`}
         <span class="tsub" id="kartaSpz" style="font-size:15px;font-weight:400">${spzVozu ? 'SPZ ' + esc(spzVozu) : ''}</span></div>
+      <div class="chips" id="kartaTrakce" style="margin:6px 0">${Object.entries(TRAKCE).map(([k, n]) =>
+        `<button class="chip" data-t="${k}" aria-pressed="${k === trakce}">${n}</button>`).join('')}</div>
+      ${duplicita ? `<div class="tsub err" style="margin-bottom:4px">Číslo ${esc(cislo)} má víc vozů (${[...typy].map((x) => TRAKCE[x].toLowerCase()).join(', ')}) – vyberte trakci.</div>` : ''}
       <div class="tsub">${stavVozu}</div>
-      ${p ? `<div class="ok" style="margin-top:8px">✓ Projeto ${esc(datumIso(p.t))}${p.d ? ' · ' + esc(p.d) : ''}</div>
-             <button class="sec" id="projetiZrusit" style="margin-top:8px">Zrušit projetí</button>`
+      ${p ? `<div class="ok" style="margin-top:8px">✓ Projeto ${esc(datumIso(p.t))}${p.d ? ' · ' + esc(p.d) : ''}${p.o ? ' · oběh ' + esc(p.o) : ''}</div>
+             <div class="tok" style="margin-top:8px"><button class="sec" id="projetiUpravit" style="flex:1" ${jeBlokovany() ? 'disabled' : ''}>Upravit oběh</button>
+               <button class="sec" id="projetiZrusit">Zrušit projetí</button></div>`
           : `<input type="text" id="projetiDopravce" list="dopravciList" placeholder="Dopravce" value="${esc(dopravce)}">
              <input type="text" id="projetiSpz" placeholder="SPZ (nepovinné)" value="${esc(spzVozu)}" autocapitalize="characters" style="margin-top:0">
+             <input type="text" id="projetiObeh" list="obehyList" placeholder="Oběh (nepovinné), např. 347/17" value="${esc(obehNazev)}" autocapitalize="characters" style="margin-top:0">
+             <datalist id="obehyList">${R ? [...new Set(R.obehy.map((x) => x.o))].map((x) => `<option value="${esc(x)}">`).join('') : ''}</datalist>
              <datalist id="dopravciList">${[...new Set([...Object.values(zname), ...Object.values(projete).map((x) => x.d)].filter(Boolean))].sort().map((d) => `<option value="${esc(d)}">`).join('')}</datalist>
              <button class="primary" id="projetiZapsat" ${jeBlokovany() ? 'disabled' : ''}>Zapsat projetí</button>
              ${jeBlokovany() ? '<div class="tsub err" style="margin-top:6px">Váš účet je zablokovaný – zapisovat nemůžete.</div>' : ''}`}
       <div class="ostatni" id="projetiOstatni" hidden></div>
+      ${live && live.raw[cislo] ? '<button class="link" id="golemioTest" style="margin-top:10px;font-size:13px">Test: data o voze z Golemia</button><div id="golemioTestOut"></div>' : ''}
     </div>`;
+    if ($('golemioTest')) $('golemioTest').addEventListener('click', () => testGolemio(cislo));
+    $('kartaTrakce').querySelectorAll('.chip').forEach((b) => b.addEventListener('click', () => kartaVozu(cislo, spzZadana, b.dataset.t)));
+    if (p) $('projetiUpravit').addEventListener('click', async () => {
+      const o = prompt(`Oběh u vozu ${popisKlice(evc)}:`, p.o || obehNazev || '');
+      if (o === null) return;
+      const novy = { ...p, o: o.trim().toUpperCase().replace(/\s+/g, '/') };
+      try { await cloudZapis(evc, novy); } catch { toast('Nepodařilo se uložit na server – zkuste to znovu'); return; }
+      projete[evc] = novy; ulozProjete(); kresliProjete(); kartaVozu(cislo, spzZadana, trakce);
+      toast('Oběh uložen');
+    });
     if (p) $('projetiZrusit').addEventListener('click', async () => {
       try { await cloudSmaz(evc); } catch { toast('Nepodařilo se smazat na serveru – zkuste to znovu'); return; }
-      delete projete[evc]; ulozProjete(); kresliProjete(); hledejProjeti();
-      toast(`Projetí vozu ${evc} zrušeno · celkem ${Object.keys(projete).length}`);
+      delete projete[evc]; ulozProjete(); kresliProjete(); kartaVozu(cislo, spzZadana, trakce);
+      toast(`Projetí vozu ${popisKlice(evc)} zrušeno · celkem ${Object.keys(projete).length}`);
     });
     else $('projetiZapsat').addEventListener('click', async () => {
       const spzNova = normSpz($('projetiSpz').value);
       if (spzNova && !jeSpz(spzNova)) { toast('SPZ nevypadá správně (např. 1AB 2345)'); return; }
-      const zaznam = { d: $('projetiDopravce').value.trim(), t: dnesIso(), o: obehNazev || '', s: spzNova };
+      const zaznam = { d: $('projetiDopravce').value.trim(), t: dnesIso(), o: $('projetiObeh').value.trim().toUpperCase().replace(/\s+/g, '/'), s: spzNova };
       $('projetiZapsat').disabled = true;
       try { await cloudZapis(evc, zaznam); } catch { $('projetiZapsat').disabled = false; toast('Nepodařilo se uložit na server – zkuste to znovu'); return; }
       projete[evc] = zaznam;
       if (spzNova) ulozSpz(evc, spzNova, zaznam.d);
       cekajiciSpz = '';
-      ulozProjete(); kresliProjete(); hledejProjeti();
+      ulozProjete(); kresliProjete(); kartaVozu(cislo, spzZadana, trakce);
       toast(`Zapsáno! Celkem máte ${pocetVozu(Object.keys(projete).length)}.`);
     });
     // SPZ ze společného seznamu (když ji telefon ještě nezná)
@@ -1811,6 +1913,8 @@ if (typeof document !== 'undefined') (function () {
     }
   }
 
+  const odkazKlice = (k) => { const { c, t } = rozlozKlic(k);
+    return t === 'T' ? `<span class="evc">${esc(c)}</span>` : `<a class="evc link" href="${esc(SA_URL(c))}" target="_blank" rel="noopener">${esc(c)}</a>`; };
   const datumIso = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${+d}. ${+m}. ${y}`; };
 
   function kresliProjete() {
@@ -1824,15 +1928,15 @@ if (typeof document !== 'undefined') (function () {
         .map(([d, n]) => `<option value="${esc(d)}">${esc(d)} (${n})</option>`).join('');
     filtr.value = podle[vybrany] ? vybrany : '';
     const zobraz = vse.filter(([, p]) => !filtr.value || (p.d || 'neznámý dopravce') === filtr.value)
-      .sort((a, b) => evcSort(a[0], b[0]));
+      .sort((a, b) => evcSort(rozlozKlic(a[0]).c, rozlozKlic(b[0]).c) || a[0].localeCompare(b[0]));
     $('projetiPocet').textContent = `celkem ${vse.length}`;
     $('projetiSeznam').innerHTML = zobraz.length ? zobraz.map(([evc, p]) => `<div class="prow">
-        <a class="evc link" href="${esc(SA_URL(evc))}" target="_blank" rel="noopener">${esc(evc)}</a>
-        <div class="info">${esc(p.d || 'neznámý dopravce')}<div class="tsub">${p.s || spzMapa[evc] ? 'SPZ ' + esc(p.s || spzMapa[evc]) + ' · ' : ''}${esc(datumIso(p.t))}${p.o ? ' · oběh ' + esc(p.o) : ''}</div></div>
+        ${odkazKlice(evc)}
+        <div class="info">${esc(p.d || 'neznámý dopravce')}${rozlozKlic(evc).t ? ` <span class="badge bad">${TRAKCE[rozlozKlic(evc).t].toLowerCase()}</span>` : ''}<div class="tsub">${p.s || spzMapa[evc] ? 'SPZ ' + esc(p.s || spzMapa[evc]) + ' · ' : ''}${esc(datumIso(p.t))}${p.o ? ' · oběh ' + esc(p.o) : ''}</div></div>
         <button class="x" data-evc="${esc(evc)}" aria-label="Smazat">×</button></div>`).join('')
       : '<div class="empty">Zatím žádné projeté vozy.</div>';
     $('projetiSeznam').querySelectorAll('.x').forEach((b) => b.addEventListener('click', () => {
-      if (!confirm(`Smazat vůz ${b.dataset.evc} z projetých?`)) return;
+      if (!confirm(`Smazat vůz ${popisKlice(b.dataset.evc)} z projetých?`)) return;
       cloudSmaz(b.dataset.evc).then(() => {
         delete projete[b.dataset.evc]; ulozProjete(); kresliProjete(); hledejProjeti();
       }).catch(() => toast('Nepodařilo se smazat na serveru – zkuste to znovu'));
