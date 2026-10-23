@@ -122,7 +122,7 @@ input.pole { width: 100%; font-size: 16px; padding: 10px 12px; border-radius: 10
 .prow .x { background: none; border: 0; color: var(--muted); font-size: 20px; cursor: pointer; padding: 4px 8px; }
 .vcard { margin-top: 10px; padding: 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
 .vcard .evc { font-size: 22px; font-weight: 700; }
-.vcard input[type=text] { width: 100%; font-size: 15px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); margin: 8px 0; }
+.vcard input[type=text], .vcard input#projetiSpz { width: 100%; font-size: 15px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); margin: 8px 0; }
 .vcard .primary { width: 100%; margin-top: 8px; }
 .ok { color: #1f9d55; font-weight: 600; }
 .btnfile { display: inline-flex; align-items: center; }
@@ -221,8 +221,8 @@ button.primary:disabled { opacity: .4; cursor: default; }
     </div>
 
     <div class="card">
-      <label class="big" for="projetiEvc">Ev. č. vozu</label>
-      <input type="search" id="projetiEvc" placeholder="např. 1444" autocomplete="off" inputmode="numeric">
+      <label class="big" for="projetiEvc">Ev. č. nebo SPZ vozu</label>
+      <input type="search" id="projetiEvc" placeholder="např. 1444 nebo 1AB 2345" autocomplete="off" autocapitalize="characters">
       <div id="projetiVysledek"></div>
     </div>
 
@@ -360,7 +360,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-10-23.9';
+const APP_VERZE = '2026-10-23.10';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -922,7 +922,7 @@ if (typeof document !== 'undefined') (function () {
     $('tabBtnVvjr').addEventListener('click', () => prepniZalozku('vvjr'));
     $('tabBtnProjeti').addEventListener('click', () => prepniZalozku('projeti'));
     let tProj;
-    $('projetiEvc').addEventListener('input', () => { clearTimeout(tProj); tProj = setTimeout(hledejProjeti, 250); });
+    $('projetiEvc').addEventListener('input', () => { cekajiciSpz = ''; clearTimeout(tProj); tProj = setTimeout(hledejProjeti, 250); });
     $('projetiFiltr').addEventListener('change', () => { ls.set('projetiFiltr', $('projetiFiltr').value); kresliProjete(); });
     $('projetiExport').addEventListener('click', exportProjete);
     $('projetiImport').addEventListener('change', (e) => { if (e.target.files[0]) importProjete(e.target.files[0]); e.target.value = ''; });
@@ -1054,7 +1054,8 @@ if (typeof document !== 'undefined') (function () {
   function hledejVuz() {
     const box = $('vuzVysledek');
     const raw = $('hledatVuz').value.trim();
-    const q = raw.toUpperCase().replace(/[\s-]/g, '');
+    let q = raw.toUpperCase().replace(/[\s-]/g, '');
+    if (jeSpz(q) && evcPodleSpz(normSpz(q))) q = evcPodleSpz(normSpz(q));
     if (!q) { box.innerHTML = ''; return; }
     if (!live) { box.innerHTML = '<div class="empty">Hledání vozu potřebuje Golemio token (dole).</div>'; return; }
     const shoda = (v) => v && String(v).toUpperCase().replace(/[\s-]/g, '') === q;
@@ -1074,7 +1075,7 @@ if (typeof document !== 'undefined') (function () {
     if (!nalezy.size) {
       const spz = /[A-Z]/.test(q);
       box.innerHTML = `<div class="empty">${spz
-        ? 'Podle SPZ Golemio nehledá – zjistěte ev. č. vozu na ' + sa + ' a zadejte ho sem.'
+        ? 'Tuhle SPZ zatím nikdo nepřiřadil k vozu (doplňuje se při zápisu projetí). Ev. č. zjistíte na ' + sa + '.'
         : 'Vůz teď v datech Golemia není (nejede ani nečeká na konečné). Vozy odjeté dříve dnes se najdou u oběhů, které jste už otevřel.'
       } · ${spz ? '' : sa}</div>`;
       return;
@@ -1201,7 +1202,7 @@ if (typeof document !== 'undefined') (function () {
       const { F, db } = cloud.fb;
       const snap = await F.getDocs(F.query(F.collection(db, 'projeti'), F.where('uid', '==', u.uid)));
       const zUctu = {};
-      snap.forEach((d) => { const x = d.data(); zUctu[x.evc] = { d: x.dopravce || '', t: x.datum || '', o: x.obeh || '' }; });
+      snap.forEach((d) => { const x = d.data(); zUctu[x.evc] = { d: x.dopravce || '', t: x.datum || '', o: x.obeh || '', s: x.spz || '' }; });
       if (cloud.user !== u) return;
       projete = zUctu; ulozProjete();
       // projetí uložená v telefonu bez účtu -> nabídnout přenos do účtu
@@ -1217,7 +1218,7 @@ if (typeof document !== 'undefined') (function () {
   }
 
   const idProjeti = (evc) => `${evc}_${cloud.user.uid}`;
-  const dataProjeti = (evc, p) => ({ evc, uid: cloud.user.uid, prezdivka: cloud.jmeno, dopravce: p.d || '',
+  const dataProjeti = (evc, p) => ({ evc, uid: cloud.user.uid, prezdivka: cloud.jmeno, dopravce: p.d || '', spz: p.s || '',
     datum: p.t || '', obeh: p.o || '', cas: cloud.fb.F.serverTimestamp() });
   async function cloudZapis(evc, p) {
     if (!cloud.user) return;
@@ -1685,22 +1686,89 @@ if (typeof document !== 'undefined') (function () {
     clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), 2200);
   }
 
-  function hledejProjeti() {
+  /* --- SPZ: společný seznam vozů (evč -> SPZ), doplňují ho uživatelé --- */
+  let spzMapa = nactiJson('spzMapa', {});            // evč -> SPZ (paměť telefonu + to, co přišlo ze serveru)
+  const ulozSpzMapu = () => ls.set('spzMapa', JSON.stringify(spzMapa));
+  const normSpz = (x) => String(x || '').toUpperCase().replace(/[\s\-.]+/g, '');
+  const jeSpz = (q) => /[A-Z]/.test(q) && /\d/.test(q) && q.length >= 5 && q.length <= 8;
+  const evcPodleSpz = (spz) => Object.keys(spzMapa).find((e) => spzMapa[e] === spz)
+    || Object.keys(projete).find((e) => projete[e].s === spz) || null;
+  let cekajiciSpz = '';                               // SPZ zadaná před tím, než bylo známé ev. č.
+
+  async function cloudSpzHledej(spz) {
+    if (!cloud.user || !cloud.fb) return null;
+    const { F, db } = cloud.fb;
+    const snap = await F.getDocs(F.query(F.collection(db, 'vozy'), F.where('spz', '==', spz)));
+    let evc = null;
+    snap.forEach((d) => { evc ||= d.id; const x = d.data(); if (x.dopravce && !zname[d.id]) zname[d.id] = x.dopravce; });
+    return evc;
+  }
+  async function cloudVuz(evc) {
+    if (!cloud.user || !cloud.fb) return null;
+    const { F, db } = cloud.fb;
+    const d = await F.getDoc(F.doc(db, 'vozy', evc));
+    return d.exists() ? d.data() : null;
+  }
+  async function ulozSpz(evc, spz, dopravce) {
+    if (!spz) return;
+    spzMapa[evc] = spz; ulozSpzMapu();
+    if (!cloud.user || jeBlokovany()) return;
+    try {
+      const { F, db } = cloud.fb;
+      await F.setDoc(F.doc(db, 'vozy', evc), { spz, dopravce: dopravce || '', upravil: cloud.jmeno, cas: F.serverTimestamp() });
+    } catch {}
+  }
+
+  async function hledejProjeti() {
     const box = $('projetiVysledek');
-    const evc = normEvc($('projetiEvc').value);
-    if (!evc) { box.innerHTML = ''; return; }
+    const q = normEvc($('projetiEvc').value);
+    if (!q) { box.innerHTML = ''; cekajiciSpz = ''; kartaEvc = ''; return; }
+    if (jeSpz(q)) {
+      const spz = normSpz(q);
+      let evc = evcPodleSpz(spz);
+      if (!evc) {
+        box.innerHTML = '<div class="vcard"><div class="tsub">Hledám SPZ…</div></div>';
+        try { evc = await cloudSpzHledej(spz); } catch {}
+        if (normEvc($('projetiEvc').value) !== q) return;
+      }
+      if (evc) { spzMapa[evc] = spz; ulozSpzMapu(); return kartaVozu(evc, spz); }
+      box.innerHTML = `<div class="vcard">
+        <div class="evc">${esc(spz)}</div>
+        <div class="tsub">Tuhle SPZ zatím nikdo nepřiřadil k vozu. Zadejte ev. č. – najdete ho na
+          <a class="link" href="${esc(SA_URL(spz))}" target="_blank" rel="noopener">Seznamu autobusů</a>.</div>
+        <input type="text" id="spzEvc" class="pole" placeholder="Ev. č. vozu" inputmode="numeric" style="margin-top:8px">
+        <button class="primary" id="spzPokracovat">Pokračovat</button></div>`;
+      const dal = () => {
+        const e = normEvc($('spzEvc').value);
+        if (!e || jeSpz(e)) { toast('Zadejte ev. č. vozu'); return; }
+        cekajiciSpz = spz; $('projetiEvc').value = e; hledejProjeti();
+      };
+      $('spzPokracovat').addEventListener('click', dal);
+      $('spzEvc').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') dal(); });
+      return;
+    }
+    kartaVozu(q, cekajiciSpz);
+  }
+
+  let kartaEvc = '';
+  function kartaVozu(evc, spzZadana) {
+    kartaEvc = evc;
+    const box = $('projetiVysledek');
     const ted = vuzVProvozu(evc);
     const p = projete[evc];
     const dopravce = (p && p.d) || (ted && ted.dopravce) || zname[evc] || '';
+    const spzVozu = spzZadana || (p && p.s) || spzMapa[evc] || '';
     const obehNazev = ted && ted.obeh ? ((R && R.obehy.find((x) => x.o.toUpperCase() === ted.obeh)) || { o: ted.obeh }).o : '';
     const stavVozu = ted ? `Teď v provozu${obehNazev ? ' · oběh ' + esc(obehNazev) : ''}`
       : zname[evc] ? 'Teď nejede (aplikace ho už dřív viděla)' : (live ? 'V datech Golemia teď není' : 'Golemio nenačteno – dopravce doplňte ručně');
     box.innerHTML = `<div class="vcard">
-      <div class="evc"><a class="link" href="${esc(SA_URL(evc))}" target="_blank" rel="noopener">${esc(evc)}</a></div>
+      <div class="evc"><a class="link" href="${esc(SA_URL(evc))}" target="_blank" rel="noopener">${esc(evc)}</a>
+        <span class="tsub" id="kartaSpz" style="font-size:15px;font-weight:400">${spzVozu ? 'SPZ ' + esc(spzVozu) : ''}</span></div>
       <div class="tsub">${stavVozu}</div>
       ${p ? `<div class="ok" style="margin-top:8px">✓ Projeto ${esc(datumIso(p.t))}${p.d ? ' · ' + esc(p.d) : ''}</div>
              <button class="sec" id="projetiZrusit" style="margin-top:8px">Zrušit projetí</button>`
           : `<input type="text" id="projetiDopravce" list="dopravciList" placeholder="Dopravce" value="${esc(dopravce)}">
+             <input type="text" id="projetiSpz" placeholder="SPZ (nepovinné)" value="${esc(spzVozu)}" autocapitalize="characters" style="margin-top:0">
              <datalist id="dopravciList">${[...new Set([...Object.values(zname), ...Object.values(projete).map((x) => x.d)].filter(Boolean))].sort().map((d) => `<option value="${esc(d)}">`).join('')}</datalist>
              <button class="primary" id="projetiZapsat" ${jeBlokovany() ? 'disabled' : ''}>Zapsat projetí</button>
              ${jeBlokovany() ? '<div class="tsub err" style="margin-top:6px">Váš účet je zablokovaný – zapisovat nemůžete.</div>' : ''}`}
@@ -1712,17 +1780,29 @@ if (typeof document !== 'undefined') (function () {
       toast(`Projetí vozu ${evc} zrušeno · celkem ${Object.keys(projete).length}`);
     });
     else $('projetiZapsat').addEventListener('click', async () => {
-      const zaznam = { d: $('projetiDopravce').value.trim(), t: dnesIso(), o: obehNazev || '' };
+      const spzNova = normSpz($('projetiSpz').value);
+      if (spzNova && !jeSpz(spzNova)) { toast('SPZ nevypadá správně (např. 1AB 2345)'); return; }
+      const zaznam = { d: $('projetiDopravce').value.trim(), t: dnesIso(), o: obehNazev || '', s: spzNova };
       $('projetiZapsat').disabled = true;
       try { await cloudZapis(evc, zaznam); } catch { $('projetiZapsat').disabled = false; toast('Nepodařilo se uložit na server – zkuste to znovu'); return; }
       projete[evc] = zaznam;
+      if (spzNova) ulozSpz(evc, spzNova, zaznam.d);
+      cekajiciSpz = '';
       ulozProjete(); kresliProjete(); hledejProjeti();
       toast(`Zapsáno! Celkem máte ${pocetVozu(Object.keys(projete).length)}.`);
     });
+    // SPZ ze společného seznamu (když ji telefon ještě nezná)
+    if (cloud.user && !spzVozu) cloudVuz(evc).then((v) => {
+      if (!v || !v.spz || kartaEvc !== evc) return;
+      spzMapa[evc] = v.spz; ulozSpzMapu();
+      if ($('kartaSpz')) $('kartaSpz').textContent = 'SPZ ' + v.spz;
+      if ($('projetiSpz') && !$('projetiSpz').value) $('projetiSpz').value = v.spz;
+      if ($('projetiDopravce') && !$('projetiDopravce').value && v.dopravce) $('projetiDopravce').value = v.dopravce;
+    }).catch(() => {});
     if (cloud.user) {
       ostatniUzivatele(evc).then((lidi) => {
         const box2 = $('projetiOstatni');
-        if (!box2 || normEvc($('projetiEvc').value) !== evc) return;
+        if (!box2 || kartaEvc !== evc) return;
         box2.hidden = false;
         box2.innerHTML = lidi.length
           ? `Tento vůz má projetý i: ${lidi.map((x) => `<b>${esc(x.prezdivka || '?')}</b>${x.datum ? ' <span class="tsub">(' + esc(datumIso(x.datum)) + ')</span>' : ''}`).join(', ')}`
@@ -1748,7 +1828,7 @@ if (typeof document !== 'undefined') (function () {
     $('projetiPocet').textContent = `celkem ${vse.length}`;
     $('projetiSeznam').innerHTML = zobraz.length ? zobraz.map(([evc, p]) => `<div class="prow">
         <a class="evc link" href="${esc(SA_URL(evc))}" target="_blank" rel="noopener">${esc(evc)}</a>
-        <div class="info">${esc(p.d || 'neznámý dopravce')}<div class="tsub">${esc(datumIso(p.t))}${p.o ? ' · oběh ' + esc(p.o) : ''}</div></div>
+        <div class="info">${esc(p.d || 'neznámý dopravce')}<div class="tsub">${p.s || spzMapa[evc] ? 'SPZ ' + esc(p.s || spzMapa[evc]) + ' · ' : ''}${esc(datumIso(p.t))}${p.o ? ' · oběh ' + esc(p.o) : ''}</div></div>
         <button class="x" data-evc="${esc(evc)}" aria-label="Smazat">×</button></div>`).join('')
       : '<div class="empty">Zatím žádné projeté vozy.</div>';
     $('projetiSeznam').querySelectorAll('.x').forEach((b) => b.addEventListener('click', () => {
