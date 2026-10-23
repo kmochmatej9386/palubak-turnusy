@@ -2,8 +2,16 @@
 <html lang="cs">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>VVJŘ PID</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#c8102e">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="VVJŘ PID">
 <style>
 :root {
   --bg: #f6f7f9; --panel: #ffffff; --text: #16191d; --muted: #66707c; --line: #e2e5ea;
@@ -23,7 +31,10 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text);
   font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-main { max-width: 760px; margin: 0 auto; padding: 16px 16px 120px; }
+main { max-width: 760px; margin: 0 auto; padding: calc(16px + env(safe-area-inset-top)) 16px 120px; }
+.topline { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+#instalovat { padding: 7px 12px; font-size: 14px; }
+.ioshint { font-size: 13px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin-top: 8px; }
 h1 { font-size: 20px; margin: 4px 0 2px; }
 .sub { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
@@ -75,11 +86,26 @@ button.link { background: none; border: 0; padding: 0; font: inherit; font-size:
 .vysl { display: block; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--bg); color: var(--text);
   border-radius: 10px; padding: 10px 12px; margin-top: 6px; font: inherit; cursor: pointer; }
 .vysl b { font-size: 17px; }
-.golemio { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.tabs { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 4px; margin: 10px 0 12px; }
+.tabs button { flex: 1; border: 0; background: none; color: var(--muted); font: inherit; font-weight: 600; padding: 9px 6px; border-radius: 9px; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-text); }
+select { width: 100%; font-size: 16px; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); margin-bottom: 6px; }
+.prow { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.prow:last-child { border-bottom: 0; }
+.prow .evc { font-weight: 700; font-size: 17px; min-width: 3.5em; font-variant-numeric: tabular-nums; }
+.prow .info { flex: 1; min-width: 0; }
+.prow .x { background: none; border: 0; color: var(--muted); font-size: 20px; cursor: pointer; padding: 4px 8px; }
+.vcard { margin-top: 10px; padding: 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
+.vcard .evc { font-size: 22px; font-weight: 700; }
+.vcard input[type=text] { width: 100%; font-size: 15px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); margin: 8px 0; }
+.vcard .primary { width: 100%; margin-top: 8px; }
+.ok { color: #1f9d55; font-weight: 600; }
+.btnfile { display: inline-flex; align-items: center; }
+.golemio { }
 .tok { display: flex; gap: 8px; margin-bottom: 6px; }
 .tok input { flex: 1; min-width: 0; font-size: 15px; padding: 8px 10px; border-radius: 8px;
   border: 1px solid var(--line); background: var(--bg); color: var(--text); }
-button.sec { border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px;
+.sec { border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px;
   padding: 8px 14px; font-size: 15px; cursor: pointer; }
 #obehLive:not(:empty) { margin-bottom: 4px; }
 .bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
@@ -96,7 +122,14 @@ button.primary:disabled { opacity: .4; cursor: default; }
 </head>
 <body>
 <main>
-  <h1>VVJŘ PID</h1>
+  <div class="topline"><h1>VVJŘ PID</h1><button class="sec" id="instalovat" hidden>Nainstalovat</button></div>
+  <div class="ioshint" id="iosHint" hidden>Instalace na iPhonu: <b>Sdílet</b> (čtvereček se šipkou) → <b>Přidat na plochu</b>. <button class="link" id="iosHintZavrit">Zavřít</button></div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" id="tabBtnVvjr" aria-selected="true">VVJŘ</button>
+    <button role="tab" id="tabBtnProjeti" aria-selected="false">Projetí vozu</button>
+  </nav>
+
+  <section id="tabVvjr">
   <div class="sub"><span id="stav">Načítám…</span> <button class="link" id="obnovGtfs" hidden>stáhnout nové GTFS</button>
     <progress id="prubeh" max="1" value="0" hidden></progress></div>
 
@@ -125,11 +158,6 @@ button.primary:disabled { opacity: .4; cursor: default; }
       <label><input type="checkbox" id="optDopravce"> Dopravce</label>
       <label><input type="checkbox" id="optVuz"> Číslo vozu</label>
     </div>
-    <div class="golemio">
-      <div class="tok"><input type="password" id="golemioToken" placeholder="Golemio API token" autocomplete="off">
-        <button class="sec" id="golemioUlozit">Uložit</button></div>
-      <div class="tsub"><span id="golemioStav"></span> <button class="link" id="golemioObnov">obnovit</button></div>
-    </div>
   </div>
 
   <div class="card" id="spojeCard" hidden>
@@ -142,6 +170,37 @@ button.primary:disabled { opacity: .4; cursor: default; }
   <div class="card" id="nahledCard" hidden>
     <div class="head"><h2>Náhled</h2></div>
     <pre id="nahled"></pre>
+  </div>
+  </section>
+
+  <section id="tabProjeti" hidden>
+    <div class="card">
+      <label class="big" for="projetiEvc">Ev. č. vozu</label>
+      <input type="search" id="projetiEvc" placeholder="např. 1444" autocomplete="off" inputmode="numeric">
+      <div id="projetiVysledek"></div>
+    </div>
+
+    <div class="card">
+      <div class="head"><h2>Projeté vozy</h2><span class="meta" id="projetiPocet"></span></div>
+      <select id="projetiFiltr"></select>
+      <div id="projetiSeznam"></div>
+    </div>
+
+    <div class="card">
+      <div class="head"><h2>Záloha</h2></div>
+      <p class="tsub" style="margin:0 0 10px">Projeté vozy se ukládají v tomto prohlížeči. Zálohu si stáhněte, ať o ně nepřijdete (a můžete je přenést do jiného telefonu).</p>
+      <div class="tok"><button class="sec" id="projetiExport">Stáhnout zálohu</button>
+        <label class="sec btnfile">Nahrát zálohu<input type="file" id="projetiImport" accept=".json,application/json" hidden></label></div>
+    </div>
+  </section>
+
+  <div class="card">
+    <div class="golemio">
+      <label class="big" for="golemioToken" style="font-size:14px">Golemio token</label>
+      <div class="tok"><input type="password" id="golemioToken" placeholder="Golemio API token" autocomplete="off">
+        <button class="sec" id="golemioUlozit">Uložit</button></div>
+      <div class="tsub"><span id="golemioStav"></span> <button class="link" id="golemioObnov">obnovit</button></div>
+    </div>
   </div>
 </main>
 
@@ -514,7 +573,7 @@ if (typeof document !== 'undefined') (function () {
     obnovObeh();
   }
 
-  function obnovObeh() { if (obeh) { kresliSpoje(); nahled(); dohledejVuz(obeh); } if ($('hledatVuz').value) hledejVuz(); }
+  function obnovObeh() { zapamatujVozy(); if (!$('tabProjeti').hidden) hledejProjeti(); if (obeh) { kresliSpoje(); nahled(); dohledejVuz(obeh); } if ($('hledatVuz').value) hledejVuz(); }
 
   // spoj z Golemia přiřadit k oběhu i podle našich turnusů (spolehlivější než jen origin_route_name)
   function doplnPodleTurnusu(l) {
@@ -635,6 +694,15 @@ if (typeof document !== 'undefined') (function () {
       $(id).checked = ls.get(id) === '1';
       $(id).addEventListener('change', () => { ls.set(id, $(id).checked ? '1' : '0'); kresliSpoje(); nahled(); });
     }
+    $('tabBtnVvjr').addEventListener('click', () => prepniZalozku('vvjr'));
+    $('tabBtnProjeti').addEventListener('click', () => prepniZalozku('projeti'));
+    let tProj;
+    $('projetiEvc').addEventListener('input', () => { clearTimeout(tProj); tProj = setTimeout(hledejProjeti, 250); });
+    $('projetiFiltr').addEventListener('change', () => { ls.set('projetiFiltr', $('projetiFiltr').value); kresliProjete(); });
+    $('projetiExport').addEventListener('click', exportProjete);
+    $('projetiImport').addEventListener('change', (e) => { if (e.target.files[0]) importProjete(e.target.files[0]); e.target.value = ''; });
+    kresliProjete();
+    if (ls.get('zalozka') === 'projeti') prepniZalozku('projeti');
     $('hledat').addEventListener('input', vyber);
     $('hledat').addEventListener('focus', naseptej);
     let tVuz;
@@ -729,7 +797,7 @@ if (typeof document !== 'undefined') (function () {
     const raw = $('hledatVuz').value.trim();
     const q = raw.toUpperCase().replace(/[\s-]/g, '');
     if (!q) { box.innerHTML = ''; return; }
-    if (!live) { box.innerHTML = '<div class="empty">Hledání vozu potřebuje Golemio token (níže).</div>'; return; }
+    if (!live) { box.innerHTML = '<div class="empty">Hledání vozu potřebuje Golemio token (dole).</div>'; return; }
     const shoda = (v) => v && String(v).toUpperCase().replace(/[\s-]/g, '') === q;
     const nalezy = new Map();   // klíč oběhu -> { ted: tid|null, posledni: tid|null, dopravce }
     const pridej = (klic, tid, ted, dopravce) => {
@@ -765,6 +833,126 @@ if (typeof document !== 'undefined') (function () {
     }));
   }
 
+  /* ---------- záložky ---------- */
+  function prepniZalozku(k) {
+    const vv = k === 'vvjr';
+    $('tabVvjr').hidden = !vv; $('tabProjeti').hidden = vv;
+    $('tabBtnVvjr').setAttribute('aria-selected', vv); $('tabBtnProjeti').setAttribute('aria-selected', !vv);
+    document.querySelector('.bar').hidden = !vv;
+    ls.set('zalozka', k);
+    if (!vv) { kresliProjete(); hledejProjeti(); }
+  }
+
+  /* ---------- projetí vozu ---------- */
+  const nactiJson = (k, def) => { try { return JSON.parse(ls.get(k) || '') || def; } catch { return def; } };
+  let projete = nactiJson('projete', {});        // evč -> { d: dopravce, t: 'RRRR-MM-DD', o: oběh }
+  let zname = nactiJson('znameVozy', {});        // evč -> dopravce (vozy, které už aplikace viděla v Golemiu)
+  const ulozProjete = () => ls.set('projete', JSON.stringify(projete));
+  const normEvc = (x) => String(x || '').trim().toUpperCase().replace(/\s+/g, '');
+  const dnesIso = () => new Date().toLocaleDateString('sv-SE');
+  const evcSort = (a, b) => prirozene(a, b);
+
+  function zapamatujVozy() {
+    if (!live) return;
+    let zmena = false;
+    for (const [v, d] of Object.values(live.trip)) {
+      if (v && d && zname[v] !== d) { zname[v] = d; zmena = true; }
+    }
+    if (zmena) ls.set('znameVozy', JSON.stringify(zname));
+  }
+
+  // kde vůz teď jezdí (podle Golemia)
+  function vuzVProvozu(evc) {
+    if (!live) return null;
+    for (const [tid, [v, d]] of Object.entries(live.trip)) {
+      if (normEvc(v) === evc) return { dopravce: d, obeh: klicObehu(tid), tid };
+    }
+    return null;
+  }
+
+  function toast(msg) {
+    const el = $('toast');
+    el.textContent = msg; el.classList.add('show');
+    clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), 2200);
+  }
+
+  function hledejProjeti() {
+    const box = $('projetiVysledek');
+    const evc = normEvc($('projetiEvc').value);
+    if (!evc) { box.innerHTML = ''; return; }
+    const ted = vuzVProvozu(evc);
+    const p = projete[evc];
+    const dopravce = (p && p.d) || (ted && ted.dopravce) || zname[evc] || '';
+    const obehNazev = ted && ted.obeh ? ((R && R.obehy.find((x) => x.o.toUpperCase() === ted.obeh)) || { o: ted.obeh }).o : '';
+    const stavVozu = ted ? `Teď v provozu${obehNazev ? ' · oběh ' + esc(obehNazev) : ''}`
+      : zname[evc] ? 'Teď nejede (aplikace ho už dřív viděla)' : (live ? 'V datech Golemia teď není' : 'Golemio nenačteno – dopravce doplňte ručně');
+    box.innerHTML = `<div class="vcard">
+      <div class="evc"><a class="link" href="${esc(SA_URL(evc))}" target="_blank" rel="noopener">${esc(evc)}</a></div>
+      <div class="tsub">${stavVozu}</div>
+      ${p ? `<div class="ok" style="margin-top:8px">✓ Projeto ${esc(datumIso(p.t))}${p.d ? ' · ' + esc(p.d) : ''}</div>
+             <button class="sec" id="projetiZrusit" style="margin-top:8px">Zrušit projetí</button>`
+          : `<input type="text" id="projetiDopravce" list="dopravciList" placeholder="Dopravce" value="${esc(dopravce)}">
+             <datalist id="dopravciList">${[...new Set([...Object.values(zname), ...Object.values(projete).map((x) => x.d)].filter(Boolean))].sort().map((d) => `<option value="${esc(d)}">`).join('')}</datalist>
+             <button class="primary" id="projetiZapsat">Zapsat projetí</button>`}
+    </div>`;
+    if (p) $('projetiZrusit').addEventListener('click', () => {
+      delete projete[evc]; ulozProjete(); kresliProjete(); hledejProjeti();
+      toast(`Projetí vozu ${evc} zrušeno · celkem ${Object.keys(projete).length}`);
+    });
+    else $('projetiZapsat').addEventListener('click', () => {
+      projete[evc] = { d: $('projetiDopravce').value.trim(), t: dnesIso(), o: obehNazev || '' };
+      ulozProjete(); kresliProjete(); hledejProjeti();
+      const n = Object.keys(projete).length;
+      toast(`Zapsáno! Celkem máte ${n} ${n === 1 ? 'projetý vůz' : n < 5 ? 'projeté vozy' : 'projetých vozů'}.`);
+    });
+  }
+
+  const datumIso = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${+d}. ${+m}. ${y}`; };
+
+  function kresliProjete() {
+    const vse = Object.entries(projete);
+    const podle = {};
+    for (const [, p] of vse) { const d = p.d || 'neznámý dopravce'; podle[d] = (podle[d] || 0) + 1; }
+    const filtr = $('projetiFiltr');
+    const vybrany = filtr.value || ls.get('projetiFiltr') || '';
+    filtr.innerHTML = `<option value="">Všichni dopravci (${vse.length})</option>` +
+      Object.entries(podle).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'cs'))
+        .map(([d, n]) => `<option value="${esc(d)}">${esc(d)} (${n})</option>`).join('');
+    filtr.value = podle[vybrany] ? vybrany : '';
+    const zobraz = vse.filter(([, p]) => !filtr.value || (p.d || 'neznámý dopravce') === filtr.value)
+      .sort((a, b) => evcSort(a[0], b[0]));
+    $('projetiPocet').textContent = `celkem ${vse.length}`;
+    $('projetiSeznam').innerHTML = zobraz.length ? zobraz.map(([evc, p]) => `<div class="prow">
+        <a class="evc link" href="${esc(SA_URL(evc))}" target="_blank" rel="noopener">${esc(evc)}</a>
+        <div class="info">${esc(p.d || 'neznámý dopravce')}<div class="tsub">${esc(datumIso(p.t))}${p.o ? ' · oběh ' + esc(p.o) : ''}</div></div>
+        <button class="x" data-evc="${esc(evc)}" aria-label="Smazat">×</button></div>`).join('')
+      : '<div class="empty">Zatím žádné projeté vozy.</div>';
+    $('projetiSeznam').querySelectorAll('.x').forEach((b) => b.addEventListener('click', () => {
+      if (!confirm(`Smazat vůz ${b.dataset.evc} z projetých?`)) return;
+      delete projete[b.dataset.evc]; ulozProjete(); kresliProjete(); hledejProjeti();
+    }));
+  }
+
+  function exportProjete() {
+    const blob = new Blob([JSON.stringify({ projete, zname, cas: new Date().toISOString() }, null, 1)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `projete-vozy-${dnesIso()}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
+  async function importProjete(f) {
+    try {
+      const j = JSON.parse(await f.text());
+      const nove = j.projete || j;
+      let n = 0;
+      for (const [evc, p] of Object.entries(nove)) if (!projete[evc] && p && typeof p === 'object') { projete[evc] = p; n++; }
+      if (j.zname) zname = { ...j.zname, ...zname };
+      ulozProjete(); ls.set('znameVozy', JSON.stringify(zname)); kresliProjete();
+      toast(`Nahráno ${n} vozů · celkem ${Object.keys(projete).length}`);
+    } catch { toast('Soubor zálohy se nepodařilo přečíst'); }
+  }
+
   function nastavVariantu(i) {
     obeh = varianty[i];
     vybrane = new Set();
@@ -783,7 +971,7 @@ if (typeof document !== 'undefined') (function () {
     const lo = live && live.obeh[obeh.o.toUpperCase()];
     const proc = live && live.dohledano[obeh.o.toUpperCase()];
     const odkazVozu = (v) => `<a class="link" href="${esc(SA_URL(v))}" target="_blank" rel="noopener">${esc(v)}</a>`;
-    $('obehLive').innerHTML = !live ? (ls.get('golemioToken') ? 'Vůz a dopravce: Golemio nenačteno (viz chyba výše)' : '') : lo
+    $('obehLive').innerHTML = !live ? (ls.get('golemioToken') ? 'Vůz a dopravce: Golemio nenačteno (viz chyba dole u tokenu)' : '') : lo
       ? `${esc(lo.zdroj ? 'Naposledy (' + lo.zdroj + ')' : 'Teď v provozu')}: ${lo.vozy.length ? 'vůz ' + lo.vozy.map(odkazVozu).join(', ') : 'číslo vozu neznámé'}${lo.dopravci.length ? ' · ' + esc(lo.dopravci.join(', ')) : ''}`
       : esc(`Vůz a dopravce: ${proc || 'oběh teď nejede'}`);
     if (live && lo && proc === 'hledám…') $('obehLive').innerHTML += ' · <span>dohledávám vozy u spojů…</span>';
@@ -875,6 +1063,24 @@ if (typeof document !== 'undefined') (function () {
     el.classList.add('show');
     setTimeout(() => el.classList.remove('show'), 1600);
   }
+
+  /* ---------- aplikace (PWA) ---------- */
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+  const nainstalovano = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  let instalace = null;
+  addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); instalace = e; $('instalovat').hidden = false; });
+  addEventListener('appinstalled', () => { $('instalovat').hidden = true; toast('Aplikace nainstalována'); });
+  $('instalovat').addEventListener('click', async () => {
+    if (!instalace) return;
+    instalace.prompt();
+    await instalace.userChoice.catch(() => {});
+    instalace = null; $('instalovat').hidden = true;
+  });
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (ios && !nainstalovano && location.protocol === 'https:' && ls.get('iosHint') !== '0') $('iosHint').hidden = false;
+  $('iosHintZavrit').addEventListener('click', () => { $('iosHint').hidden = true; ls.set('iosHint', '0'); });
 
   start();
 })();
