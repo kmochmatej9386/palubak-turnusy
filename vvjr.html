@@ -361,7 +361,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-10-23.12';
+const APP_VERZE = '2026-10-23.13';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -1917,6 +1917,24 @@ if (typeof document !== 'undefined') (function () {
     return t === 'T' ? `<span class="evc">${esc(c)}</span>` : `<a class="evc link" href="${esc(SA_URL(c))}" target="_blank" rel="noopener">${esc(c)}</a>`; };
   const datumIso = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${+d}. ${+m}. ${y}`; };
 
+  // zpětná úprava vlastního projetí (oběh, dopravce, datum)
+  async function upravProjeti(evc) {
+    const p = projete[evc];
+    if (!p) return;
+    const o = prompt(`Oběh u vozu ${popisKlice(evc)} (prázdné = bez oběhu):`, p.o || '');
+    if (o === null) return;
+    const d = prompt('Dopravce:', p.d || '');
+    if (d === null) return;
+    const t = prompt('Datum projetí (RRRR-MM-DD):', p.t || dnesIso());
+    if (t === null) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(t.trim())) { toast('Datum musí být ve tvaru RRRR-MM-DD'); return; }
+    const novy = { ...p, o: o.trim().toUpperCase().replace(/\s+/g, '/'), d: d.trim(), t: t.trim() };
+    try { await cloudZapis(evc, novy); } catch { toast('Nepodařilo se uložit na server – zkuste to znovu'); return; }
+    projete[evc] = novy; ulozProjete(); kresliProjete();
+    if (kartaEvc === evc) hledejProjeti();
+    toast('Uloženo');
+  }
+
   function kresliProjete() {
     const vse = Object.entries(projete);
     const podle = {};
@@ -1933,8 +1951,10 @@ if (typeof document !== 'undefined') (function () {
     $('projetiSeznam').innerHTML = zobraz.length ? zobraz.map(([evc, p]) => `<div class="prow">
         ${odkazKlice(evc)}
         <div class="info">${esc(p.d || 'neznámý dopravce')}${rozlozKlic(evc).t ? ` <span class="badge bad">${TRAKCE[rozlozKlic(evc).t].toLowerCase()}</span>` : ''}<div class="tsub">${p.s || spzMapa[evc] ? 'SPZ ' + esc(p.s || spzMapa[evc]) + ' · ' : ''}${esc(datumIso(p.t))}${p.o ? ' · oběh ' + esc(p.o) : ''}</div></div>
+        <button class="ed" data-evc="${esc(evc)}" aria-label="Upravit" ${jeBlokovany() ? 'disabled' : ''}>✎</button>
         <button class="x" data-evc="${esc(evc)}" aria-label="Smazat">×</button></div>`).join('')
       : '<div class="empty">Zatím žádné projeté vozy.</div>';
+    $('projetiSeznam').querySelectorAll('.ed').forEach((b) => b.addEventListener('click', () => upravProjeti(b.dataset.evc)));
     $('projetiSeznam').querySelectorAll('.x').forEach((b) => b.addEventListener('click', () => {
       if (!confirm(`Smazat vůz ${popisKlice(b.dataset.evc)} z projetých?`)) return;
       cloudSmaz(b.dataset.evc).then(() => {
