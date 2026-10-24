@@ -250,6 +250,12 @@ button.primary:disabled { opacity: .4; cursor: default; }
         <button class="sec" id="edSoucasnyBtn">Upravit</button>
       </div>
       <datalist id="edSoucasnyList"></datalist>
+      <div class="tsub" style="margin:14px 0 4px">Export do formátu turnusy.json</div>
+      <div class="tok">
+        <button class="sec" id="edExportCely" style="flex:1">Celý turnusy.json s úpravami</button>
+        <button class="sec" id="edExportUpravy">Jen úpravy</button>
+      </div>
+      <div class="tsub" id="edExportStav" style="margin-top:4px"></div>
     </div>
 
     <div class="card">
@@ -361,7 +367,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-10-23.13';
+const APP_VERZE = '2026-10-24.1';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -950,6 +956,8 @@ if (typeof document !== 'undefined') (function () {
     $('tabBtnEditor').addEventListener('click', () => prepniZalozku('editor'));
     $('edNovy').addEventListener('click', edNovy);
     $('edSoucasnyBtn').addEventListener('click', edSoucasnyZVyberu);
+    $('edExportCely').addEventListener('click', () => edExport(true));
+    $('edExportUpravy').addEventListener('click', () => edExport(false));
     $('edSoucasny').addEventListener('keydown', (e) => { if (e.key === 'Enter') edSoucasnyZVyberu(); });
     $('upravitObeh').addEventListener('click', () => {
       if (!obeh || !jeEditor()) return;
@@ -1314,6 +1322,58 @@ if (typeof document !== 'undefined') (function () {
     if (!kand.length) { toast('Takový oběh v turnusech není'); return; }
     edUpravitSoucasny(kand.find((o) => o.data.has(0)) || kand[0]);
     $('edSoucasny').value = '';
+  }
+
+  // --- export vlastních / upravených oběhů do formátu turnusy.json { trip_id: [pořadí] | [pořadí, "kmen"] }
+  function zaznamTurnusu(tid, nazev) {
+    const [kmen, ...zb] = String(nazev).split('/');
+    const por = zb.join('/');
+    const poradi = /^\d+$/.test(por) ? +por : por;
+    return kmen && kmen !== String(tid).split('_')[0] ? [poradi, kmen] : [poradi];
+  }
+  function upravyTurnusu() {
+    const pridat = {}, odebrat = new Set();
+    let bezTrip = 0;
+    for (const v of vlastniObehy) {
+      const tids = new Set(v.spoje.filter((x) => x.tid && !String(x.tid).startsWith('v:')).map((x) => x.tid));
+      bezTrip += v.spoje.length - tids.size;
+      if (v.puvodniNazev && R) {   // spoje vyřazené z upraveného oběhu odebrat
+        const pu = (R.obehyAuto || []).find((o) => o.o === v.puvodniNazev && o.d === v.puvodniDny);
+        if (pu) for (const t of pu.s) if (!tids.has(t)) odebrat.add(t);
+      }
+      for (const t of tids) pridat[t] = zaznamTurnusu(t, v.nazev);
+    }
+    for (const t of Object.keys(pridat)) odebrat.delete(t);
+    return { pridat, odebrat, bezTrip };
+  }
+  function stahniJson(nazev, data) {
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = nazev;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  }
+  async function edExport(cely) {
+    const st = $('edExportStav');
+    if (!vlastniObehy.length) { st.textContent = 'Nemáte žádné vlastní ani upravené oběhy.'; return; }
+    const { pridat, odebrat, bezTrip } = upravyTurnusu();
+    const pozn = bezTrip ? ` ${bezTrip} spojů vlastních linek se do turnusy.json zapsat nedá (nemají trip_id).` : '';
+    if (!cely) {
+      stahniJson(`turnusy-upravy-${dnesIso()}.json`, { pridat, odebrat: [...odebrat] });
+      st.textContent = `Staženo: ${Object.keys(pridat).length} spojů k zapsání, ${odebrat.size} k odebrání.${pozn}`;
+      return;
+    }
+    st.textContent = 'Stahuji aktuální turnusy.json…';
+    try {
+      const r = await fetch(TURNUSY_URL, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const t = await r.json();
+      for (const k of odebrat) delete t[k];
+      Object.assign(t, pridat);
+      stahniJson('turnusy.json', t);
+      st.textContent = `Staženo turnusy.json (${Object.keys(t).length} spojů): zapsáno ${Object.keys(pridat).length}, odebráno ${odebrat.size}.${pozn}`
+        + ' Nahrajte ho na GitHub přes Add file → Upload files (přepíše původní).';
+    } catch (e) { st.textContent = `Nepodařilo se stáhnout turnusy.json (${e.message}).`; }
   }
 
   function edOtevri() {
