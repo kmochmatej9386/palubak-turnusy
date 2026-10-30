@@ -163,8 +163,9 @@ button.primary:disabled { opacity: .4; cursor: default; }
     <progress id="prubeh" max="1" value="0" hidden></progress></div>
 
   <div class="card gtfs" id="gtfsCard" hidden>
-    <p>Jízdní řády PID (GTFS) se nepodařilo stáhnout automaticky. Stáhněte si soubor
-      <a href="https://data.pid.cz/PID_GTFS.zip" target="_blank" rel="noopener">PID_GTFS.zip</a>
+    <p id="gtfsText">Jízdní řády PID (GTFS) se nepodařilo stáhnout automaticky.</p>
+    <p>Stáhněte si soubor <a href="https://data.pid.cz/PID_GTFS.zip" target="_blank" rel="noopener">PID_GTFS.zip</a>
+      (nebo nejnovější z <a href="https://mobilitydatabase.org/feeds/gtfs/mdb-767" target="_blank" rel="noopener">Mobility Database</a>)
       a vyberte ho tady. Aplikace si ho zapamatuje.</p>
     <input type="file" id="gtfsSoubor" accept=".zip,application/zip">
   </div>
@@ -367,7 +368,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-10-24.1';
+const APP_VERZE = '2026-10-30.2';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -383,8 +384,10 @@ const RAW = 'https://raw.githubusercontent.com/kmochmatej9386/palubak-turnusy/ma
 const TURNUSY_URL = RAW + 'turnusy.json';
 const SA_URL = (evc) => `https://seznam-autobusu.cz/seznam?evcspz=${encodeURIComponent(evc)}&zapujcka=2`;
 const GOLEMIO = 'https://api.golemio.cz/v2/vehiclepositions';  // číslo vozu a dopravce (živě, s tokenem)
-const GTFS_URL = 'https://data.pid.cz/PID_GTFS.zip';
-const GTFS_MAX_STARI_H = 24;                   // jak často zkusit stáhnout nové GTFS
+const GTFS_URL = 'https://data.pid.cz/PID_GTFS.zip';      // přímo z PID (prohlížeč ho většinou zablokuje – CORS)
+// kopie GTFS, kterou jednou týdně stahuje GitHub (workflow gtfs.yml, větev "gtfs") – odtud stahování z aplikace funguje
+const GTFS_GH = 'https://raw.githubusercontent.com/kmochmatej9386/palubak-turnusy/gtfs/';
+const GTFS_MAX_STARI_H = 24;                   // jak často zkusit stáhnout nové GTFS z data.pid.cz (záloha)
 const DNI_DOPREDU = 7;                         // období, ze kterého se skládají oběhy
 const DNY = ['po', 'út', 'st', 'čt', 'pá', 'so', 'ne'];
 const CAL = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
@@ -860,9 +863,9 @@ if (typeof document !== 'undefined') (function () {
     if (obeh === o) { kresliSpoje(); nahled(); }
   }
 
-  async function stahniGtfs() {
-    stav('Stahuji GTFS PID (~50 MB)…', 0);
-    const r = await fetch(GTFS_URL, { cache: 'no-cache' });
+  async function stahniGtfs(url = GTFS_URL, info = null) {
+    stav('Stahuji jízdní řády PID…', 0);
+    const r = await fetch(url, { cache: 'no-cache' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const celkem = +r.headers.get('content-length') || 0;
     const reader = r.body.getReader(); const kusy = []; let n = 0;
@@ -870,19 +873,38 @@ if (typeof document !== 'undefined') (function () {
       const { value, done } = await reader.read();
       if (done) break;
       kusy.push(value); n += value.byteLength;
-      stav(`Stahuji GTFS PID… ${(n / 1048576).toFixed(0)} MB`, celkem ? n / celkem : null);
+      stav(`Stahuji jízdní řády PID… ${(n / 1048576).toFixed(0)} MB`, celkem ? n / celkem : null);
     }
     const blob = new Blob(kusy, { type: 'application/zip' });
-    await idb.set('gtfs', { blob, cas: Date.now(), zdroj: 'data.pid.cz' });
+    await idb.set('gtfs', { blob, cas: info ? (Date.parse(info.stazeno) || Date.now()) : Date.now(), zdroj: info ? 'github' : 'data.pid.cz', sha: info ? info.sha : '' });
     return blob;
   }
+  async function infoGtfsGh() {
+    const r = await fetch(GTFS_GH + 'gtfs-info.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
 
+  let gtfsChyba = false;
   async function ziskejGtfs(vynutit) {
     const ulozene = await idb.get('gtfs');
+    // 1) kopie na GitHubu: malý gtfs-info.json řekne, jestli je novější než ta v telefonu
+    try {
+      stav('Kontroluji jízdní řády…');
+      const info = await infoGtfsGh();
+      if (vynutit || !ulozene || ulozene.sha !== info.sha) {
+        gtfsChyba = false;
+        return await stahniGtfs(GTFS_GH + 'PID_GTFS.zip?v=' + encodeURIComponent(info.sha), info);
+      }
+      gtfsChyba = false;
+      return ulozene.blob;
+    } catch { /* kopie na GitHubu zatím není nebo je bez sítě – zkusit přímo PID */ }
+    // 2) záloha: přímo data.pid.cz
     const stare = !ulozene || (Date.now() - ulozene.cas) / 3600000 > GTFS_MAX_STARI_H;
     if (vynutit || stare) {
-      try { return await stahniGtfs(); } catch (e) {
-        if (ulozene) return ulozene.blob;      // jedeme se starším
+      try { gtfsChyba = false; return await stahniGtfs(); } catch (e) {
+        gtfsChyba = true;
+        if (ulozene) return ulozene.blob;      // jedeme se starším (spust() pak upozorní, když už nestačí)
         $('gtfsCard').hidden = false;
         stav('Chybí GTFS – vyberte soubor PID_GTFS.zip.');
         return null;
@@ -904,6 +926,18 @@ if (typeof document !== 'undefined') (function () {
       + ` · ${((performance.now() - t0) / 1000).toFixed(0)} s`);
     $('obnovGtfs').hidden = false;
     $('hledat').disabled = false;
+    // staré jízdní řády: PID GTFS pokrývá jen pár týdnů dopředu, pak oběhy zmizí
+    const auto = R.obehy.filter((o) => !o.vlastni).length;
+    const stariDny = gt ? (Date.now() - gt.cas) / 86400000 : 0;
+    const datGt = gt ? new Date(gt.cas).toLocaleDateString('cs-CZ') : '?';
+    if (!auto) {
+      $('gtfsText').innerHTML = `<b>Jízdní řády v telefonu (z ${esc(datGt)}) už na tyto dny nemají data – proto 0 oběhů.</b>`
+        + (gtfsChyba ? ' Automatické stažení nových se nepovedlo.' : '');
+      $('gtfsCard').hidden = false;
+    } else if (gtfsChyba && stariDny > 6) {
+      $('gtfsText').innerHTML = `Jízdní řády v telefonu jsou z ${esc(datGt)} a automaticky se aktualizovat nedaří. Brzy přestanou stačit.`;
+      $('gtfsCard').hidden = false;
+    }
     vyber();
   }
 
@@ -1001,7 +1035,8 @@ if (typeof document !== 'undefined') (function () {
     $('kopirovat').addEventListener('click', kopiruj);
     $('gtfsSoubor').addEventListener('change', async (e) => {
       const f = e.target.files[0]; if (!f) return;
-      await idb.set('gtfs', { blob: f, cas: f.lastModified || Date.now(), zdroj: f.name });
+      gtfsChyba = false;   // soubor vybraný ručně = aktuální
+      await idb.set('gtfs', { blob: f, cas: Date.now(), zdroj: f.name });
       bezpecne(() => spust(f));
     });
     $('obnovGtfs').addEventListener('click', () => bezpecne(async () => { const b = await ziskejGtfs(true); if (b) await spust(b); }));
