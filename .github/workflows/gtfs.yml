@@ -1,0 +1,75 @@
+name: GTFS PID
+# Jednou týdně stáhne jízdní řády PID (GTFS) a uloží je do větve "gtfs" tohoto repozitáře.
+# Aplikace VVJŘ si je odtud stáhne sama (z data.pid.cz to prohlížeč nedovolí).
+# Ve větvi je vždy jen jedna verze (přepisuje se), takže repozitář neroste.
+on:
+  schedule:
+    - cron: '17 2 * * 1'      # každé pondělí ve 3:17 / 4:17 českého času
+  workflow_dispatch:           # ručně: Actions → GTFS PID → Run workflow
+permissions:
+  contents: write
+concurrency:
+  group: gtfs
+  cancel-in-progress: false
+jobs:
+  gtfs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Stáhnout PID_GTFS.zip
+        run: curl -fsSL --retry 3 -o src.zip https://data.pid.cz/PID_GTFS.zip
+      - name: Zmenšit (jen soubory a sloupce, které aplikace používá)
+        run: |
+          python3 - <<'EOF'
+          import zipfile, csv, io, json, hashlib, datetime, os
+          KEEP = {
+            'agency.txt': ['agency_id', 'agency_name'],
+            'routes.txt': ['route_id', 'agency_id', 'route_short_name', 'route_type'],
+            'trips.txt': ['route_id', 'service_id', 'trip_id'],
+            'stop_times.txt': ['trip_id', 'arrival_time', 'departure_time', 'stop_id', 'stop_sequence'],
+            'stops.txt': ['stop_id', 'stop_name'],
+            'calendar.txt': None,
+            'calendar_dates.txt': None,
+          }
+          src = zipfile.ZipFile('src.zip')
+          jmena = {n.split('/')[-1]: n for n in src.namelist()}
+          os.makedirs('out', exist_ok=True)
+          with zipfile.ZipFile('out/PID_GTFS.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as out:
+            for name, cols in KEEP.items():
+              if name not in jmena:
+                continue
+              if cols is None:
+                out.writestr(name, src.read(jmena[name]))
+                continue
+              with src.open(jmena[name]) as f:
+                r = csv.reader(io.TextIOWrapper(f, encoding='utf-8-sig', newline=''))
+                h = [x.strip() for x in next(r)]
+                idx = [h.index(c) for c in cols if c in h]
+                buf = io.StringIO()
+                w = csv.writer(buf, lineterminator='\n')
+                w.writerow([h[i] for i in idx])
+                for row in r:
+                  w.writerow([row[i] if i < len(row) else '' for i in idx])
+              out.writestr(name, buf.getvalue())
+          data = open('out/PID_GTFS.zip', 'rb').read()
+          info = {
+            'stazeno': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
+            'sha': hashlib.sha256(data).hexdigest()[:16],
+            'velikost': len(data),
+            'puvodni_velikost': os.path.getsize('src.zip'),
+          }
+          json.dump(info, open('out/gtfs-info.json', 'w'))
+          print(info)
+          EOF
+      - name: Uložit do větve gtfs (přepíše předchozí verzi)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd out
+          git init -q
+          git checkout -q -b gtfs
+          git config user.name "gtfs-bot"
+          git config user.email "gtfs-bot@users.noreply.github.com"
+          git add PID_GTFS.zip gtfs-info.json
+          git commit -q -m "GTFS PID $(date -u +%F)"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gtfs
