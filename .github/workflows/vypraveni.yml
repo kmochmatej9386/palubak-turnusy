@@ -1,0 +1,47 @@
+name: Vypraveni vozu
+# Každé 3 minuty (v rámci jednoho běhu cca 27 minut) zapíše, který vůz jel na kterém spoji.
+# Data jsou ve větvi "vypraveni" (po linkách, posledních 60 dní). Větev se pokaždé přepíše
+# jedním commitem, takže repozitář neroste. turnusy.json ani collect.mjs to nemění.
+on:
+  schedule:
+    - cron: '*/20 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: vypraveni
+  cancel-in-progress: false
+jobs:
+  vypraveni:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Zaznamenávat vozy (každé 3 minuty, cca 27 minut)
+        env:
+          GOLEMIO_TOKEN: ${{ secrets.GOLEMIO_TOKEN }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          konec=$(( $(date +%s) + 27*60 ))
+          while :; do
+            rm -rf vyp
+            git clone -q --depth 1 -b vypraveni "$REPO" vyp 2>/dev/null || { mkdir -p vyp; git -C vyp init -q; }
+            rm -rf vyp/.git
+            node vypraveni.mjs vyp || echo "Záznam selhal, zkusím to příště"
+            (
+              cd vyp
+              git init -q
+              git checkout -q -b vypraveni
+              git config user.name "vypraveni-bot"
+              git config user.email "vypraveni-bot@users.noreply.github.com"
+              git add -A
+              git commit -q -m "Vypravení $(date -u +%F\ %H:%M)"
+              git push -q -f "$REPO" vypraveni || echo "Push se nepovedl"
+            )
+            [ $(( $(date +%s) + 180 )) -ge $konec ] && break
+            sleep 180
+          done
