@@ -81,6 +81,12 @@ pre { font: 13px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word;
 progress { width: 100%; height: 6px; accent-color: var(--accent); margin-top: 8px; }
 .gtfs p { margin: 0 0 10px; }
 .gtfs a, .link { color: var(--accent); }
+.hist { margin-top: 8px; border-top: 1px solid var(--line, #ddd); padding-top: 6px; }
+.hist .den { padding: 6px 0; border-bottom: 1px solid var(--line, #eee); }
+.hist .den > button { display: flex; width: 100%; justify-content: space-between; gap: 8px; background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.hist .den .dsp { font-size: 13px; color: var(--muted); margin: 4px 0 0 8px; }
+.hist .den .dsp div { padding: 2px 0; }
+.hist .chyby { margin-top: 4px; padding-top: 4px; border-top: 1px dashed var(--line, #ddd); }
 button.link { background: none; border: 0; padding: 0; font: inherit; font-size: 13px; cursor: pointer; text-decoration: underline; }
 .nasept { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; max-height: 220px; overflow-y: auto; }
 .nasept button { border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px;
@@ -191,8 +197,9 @@ button.primary:disabled { opacity: .4; cursor: default; }
   </div>
 
   <div class="card" id="spojeCard" hidden>
-    <div class="head"><h2 id="nazev"></h2><span class="meta"><span id="pocet"></span> <button class="link" id="upravitObeh" hidden>✎ Upravit</button></span></div>
+    <div class="head"><h2 id="nazev"></h2><span class="meta"><span id="pocet"></span> <button class="link" id="historieBtn">Historie vypravení</button> <button class="link" id="upravitObeh" hidden>✎ Upravit</button></span></div>
     <div class="tsub" id="obehLive"></div>
+    <div class="hist" id="historie" hidden></div>
     <label class="all"><input type="checkbox" id="vse"> Označit vše</label>
     <div id="spoje"></div>
   </div>
@@ -200,6 +207,15 @@ button.primary:disabled { opacity: .4; cursor: default; }
   <div class="card" id="nahledCard" hidden>
     <div class="head"><h2>Náhled</h2></div>
     <pre id="nahled"></pre>
+  </div>
+
+  <div class="card">
+    <div class="head"><h2>Export turnusů pro Palubák</h2></div>
+    <p class="tsub" style="margin:0 0 8px">Stáhne soubor <b>turnusy_palubak.json</b>, který Palubák načte v Nastavení → Turnusy → <b>Načíst turnusy ze souboru</b>.
+      Obsahuje oběhy z turnusů i vlastní/upravené oběhy z Editoru.</p>
+    <input type="text" id="palLinky" class="pole" placeholder="Jen linky (nepovinné), např. 347, 336, 358" autocomplete="off">
+    <button class="sec" id="palExport" style="width:100%">Stáhnout turnusy_palubak.json</button>
+    <div class="tsub" id="palStav" style="margin-top:6px"></div>
   </div>
   </section>
 
@@ -368,7 +384,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-10-30.2';
+const APP_VERZE = '2026-11-12.2';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -387,6 +403,25 @@ const GOLEMIO = 'https://api.golemio.cz/v2/vehiclepositions';  // číslo vozu a
 const GTFS_URL = 'https://data.pid.cz/PID_GTFS.zip';      // přímo z PID (prohlížeč ho většinou zablokuje – CORS)
 // kopie GTFS, kterou jednou týdně stahuje GitHub (workflow gtfs.yml, větev "gtfs") – odtud stahování z aplikace funguje
 const GTFS_GH = 'https://raw.githubusercontent.com/kmochmatej9386/palubak-turnusy/gtfs/';
+// záznam vypravení (které vozy jely na spojích) – větev "vypraveni", soubor na linku, posledních 60 dní
+const VYP_GH = 'https://raw.githubusercontent.com/kmochmatej9386/palubak-turnusy/vypraveni/';
+let ZAZN = {};   // dnešní zaznamenané vozy: trip_id -> [vůz, dopravce, čas záznamu]
+// vozy označené jako chyba (Firestore "vypchyby"): "kmen|den|pořadí" -> Set(vůz)
+let VYPCHYBY = {};
+function provozniDen(posun = 0) {   // před 3:00 je ještě předchozí provozní den
+  const d = new Date(Date.now() - 3 * 3600e3 - posun * 86400e3);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const klicChyb = (obehKod, den) => { const [k, ...p] = String(obehKod).split('/'); return `${k}|${den}|${p.join('/')}`.toUpperCase(); };
+// záznam spoje bez vozů označených jako chyba (null, když nezbude žádný)
+function bezChyb(obehKod, den, rec) {
+  if (!rec) return rec;
+  const ch = VYPCHYBY[klicChyb(obehKod, den)];
+  if (!ch || !ch.size) return rec;
+  const vozy = String(rec[0] || '').split('+').filter((v) => v && !ch.has(v));
+  if (!vozy.length) return rec[0] ? null : rec;
+  return [vozy.join('+'), ...rec.slice(1)];
+}
 const GTFS_MAX_STARI_H = 24;                   // jak často zkusit stáhnout nové GTFS z data.pid.cz (záloha)
 const DNI_DOPREDU = 7;                         // období, ze kterého se skládají oběhy
 const DNY = ['po', 'út', 'st', 'čt', 'pá', 'so', 'ne'];
@@ -684,8 +719,9 @@ function textVVJR(o, spoje, vybrane, live, chciDopravce, chciVuz, html = false) 
   if (!sel.length) return '';
   const e = html ? escHtml : (x) => String(x);
   const lo0 = (live && live.obeh[o.o.toUpperCase()]) || { vozy: [], dopravci: [] };
-  const zeSpoju = (i) => [...new Set(sel.map((t) => live && (live.trip[t] || (live.hist || {})[t])).filter(Boolean)
-    .map((x) => x[i]).filter(Boolean))];
+  const vuzSpoje = (t) => bezChyb(o.o, provozniDen(), (live && (live.trip[t] || (live.hist || {})[t])) || ZAZN[t] || null);
+  const zeSpoju = (i) => [...new Set(sel.map(vuzSpoje).filter(Boolean)
+    .flatMap((x) => i === 0 ? String(x[0] || '').split('+') : [x[i]]).filter(Boolean))];
   const vz = zeSpoju(0), dp = zeSpoju(1);
   const lo = { vozy: vz.length ? vz : lo0.vozy, dopravci: dp.length ? dp : lo0.dopravci };
   const radky = [e(`Oběh PID ${o.o} (${o.d})`)];
@@ -698,7 +734,9 @@ function textVVJR(o, spoje, vybrane, live, chciDopravce, chciVuz, html = false) 
   for (const t of sel) {
     const s = spoje[t];
     const r = `${('{' + s.linka + '}').padEnd(sirka + 2)}  ${s.z} ${hhmm(s.odj)} – ${s.do} ${hhmm(s.prij)}`;
-    radky.push(html ? escHtml(r).replace(/ {2}/g, '&nbsp; ') : r);
+    const vz = chciVuz && vuzSpoje(t) && vuzSpoje(t)[0] ? String(vuzSpoje(t)[0]).split('+') : [];
+    const doplnek = vz.length ? (html ? ' · vůz ' + vz.map((v) => `<a href="${escHtml(SA_URL(v))}">${escHtml(v)}</a>`).join('+') : ' · vůz ' + vz.join('+')) : '';
+    radky.push((html ? escHtml(r).replace(/ {2}/g, '&nbsp; ') : r) + doplnek);
   }
   return html ? radky.join('<br>\n') : radky.join('\n');
 }
@@ -800,7 +838,7 @@ if (typeof document !== 'undefined') (function () {
     obnovObeh();
   }
 
-  function obnovObeh() { zapamatujVozy(); if (!$('tabProjeti').hidden) hledejProjeti(); if (obeh) { kresliSpoje(); nahled(); dohledejVuz(obeh); } if ($('hledatVuz').value) hledejVuz(); }
+  function obnovObeh() { zapamatujVozy(); if (!$('tabProjeti').hidden) hledejProjeti(); if (obeh) { kresliSpoje(); nahled(); dohledejVuz(obeh); nactiZaznamy(obeh); } if ($('hledatVuz').value) hledejVuz(); }
 
   // spoj z Golemia přiřadit k oběhu i podle našich turnusů (spolehlivější než jen origin_route_name)
   function doplnPodleTurnusu(l) {
@@ -993,6 +1031,7 @@ if (typeof document !== 'undefined') (function () {
     $('edExportCely').addEventListener('click', () => edExport(true));
     $('edExportUpravy').addEventListener('click', () => edExport(false));
     $('edSoucasny').addEventListener('keydown', (e) => { if (e.key === 'Enter') edSoucasnyZVyberu(); });
+    $('historieBtn').addEventListener('click', () => ukazHistorii());
     $('upravitObeh').addEventListener('click', () => {
       if (!obeh || !jeEditor()) return;
       const o = obeh;
@@ -1033,6 +1072,7 @@ if (typeof document !== 'undefined') (function () {
       kresliSpoje(); nahled();
     });
     $('kopirovat').addEventListener('click', kopiruj);
+    $('palExport').addEventListener('click', exportPalubak);
     $('gtfsSoubor').addEventListener('change', async (e) => {
       const f = e.target.files[0]; if (!f) return;
       gtfsChyba = false;   // soubor vybraný ručně = aktuální
@@ -2086,7 +2126,109 @@ if (typeof document !== 'undefined') (function () {
     $('varianty').innerHTML = varianty.length < 2 ? '' : varianty.map((v, j) =>
       `<button class="chip" aria-pressed="${j === i}" data-i="${j}">${esc(v.d)}</button>`).join('');
     $('varianty').querySelectorAll('.chip').forEach((b) => b.addEventListener('click', () => nastavVariantu(+b.dataset.i)));
-    kresliSpoje(); nahled(); dohledejVuz(obeh);
+    $('historie').hidden = true;
+    kresliSpoje(); nahled(); dohledejVuz(obeh); nactiZaznamy(obeh);
+  }
+
+  /* ---------- záznam vypravení (větev "vypraveni" na GitHubu, plní ji workflow každé 3 minuty) ---------- */
+  const vypCache = {};
+  const kmenObehu = (o) => String(o.o).split('/')[0];
+  const porObehu = (o) => String(o.o).split('/').slice(1).join('/');
+  const chybyNacteno = {};
+  async function nactiChyby(kmen, vynutit) {
+    if (!cloud.user || !cloud.fb) return;
+    if (!vynutit && chybyNacteno[kmen] && Date.now() - chybyNacteno[kmen] < 3 * 60e3) return;
+    try {
+      const { F, db } = cloud.fb;
+      const snap = await F.getDocs(F.query(F.collection(db, 'vypchyby'), F.where('kmen', '==', String(kmen))));
+      for (const k of Object.keys(VYPCHYBY)) if (k.startsWith(String(kmen).toUpperCase() + '|')) delete VYPCHYBY[k];
+      snap.forEach((d) => { const x = d.data(); (VYPCHYBY[`${x.kmen}|${x.den}|${x.por}`.toUpperCase()] ||= new Set()).add(String(x.vuz)); });
+      chybyNacteno[kmen] = Date.now();
+    } catch {}
+  }
+  const idChyby = (kmen, den, por, vuz) => `${String(kmen).replace(/[^A-Za-z0-9_-]/g, '_')}_${den}_${String(por).replace(/[^A-Za-z0-9_-]/g, '_')}_${String(vuz).replace(/[^A-Za-z0-9_-]/g, '_')}`;
+  async function oznacChybu(o, den, vuz, chyba) {
+    const kmen = kmenObehu(o), por = porObehu(o);
+    if (chyba && !confirm(`Označit vůz ${vuz} na oběhu ${o.o} (${den}) jako chybu? Přestane se zobrazovat ve vypravení i ve VVJŘ (u všech uživatelů).`)) return;
+    try {
+      const { F, db } = cloud.fb;
+      if (chyba) await F.setDoc(F.doc(db, 'vypchyby', idChyby(kmen, den, por, vuz)), { kmen: String(kmen), den, por: String(por), vuz: String(vuz), kdo: cloud.jmeno || '', cas: F.serverTimestamp() });
+      else await F.deleteDoc(F.doc(db, 'vypchyby', idChyby(kmen, den, por, vuz)));
+    } catch { toast('Nepodařilo se uložit – máte právo Editor oběhů? (a jsou v Firebase nová pravidla?)'); return; }
+    const k = klicChyb(o.o, den);
+    const set = (VYPCHYBY[k] ||= new Set());
+    chyba ? set.add(String(vuz)) : set.delete(String(vuz));
+    toast(chyba ? `Vůz ${vuz} označen jako chyba` : `Vůz ${vuz} vrácen`);
+    if (o === obeh) { nactiZaznamy(o); kresliHistorii(); }
+  }
+  async function nactiVyp(kmen, vynutit) {
+    const c = vypCache[kmen];
+    if (c && !vynutit && Date.now() - c.cas < 3 * 60e3) return c.data;
+    try {
+      const r = await fetch(VYP_GH + encodeURIComponent(String(kmen).replace(/[^A-Za-z0-9_-]/g, '_')) + '.json?t=' + Math.floor(Date.now() / 60e3), { cache: 'no-store' });
+      const data = r.ok ? await r.json() : (r.status === 404 ? {} : null);
+      if (data) vypCache[kmen] = { data, cas: Date.now() };
+      return data;
+    } catch { return c ? c.data : null; }
+  }
+  function zaznamObehu(o) {
+    const c = vypCache[kmenObehu(o)]; if (!c) return null;
+    const dnes = provozniDen(), den = (c.data || {})[dnes] || {}, sp = den[porObehu(o)] || {};
+    const recs = o.s.map((t) => bezChyb(o.o, dnes, sp[t])).filter(Boolean); if (!recs.length) return null;
+    recs.sort((a, b) => String(a[2]).localeCompare(String(b[2])));
+    return { vozy: [...new Set(recs.flatMap((x) => String(x[0]).split('+')))], dopravci: [...new Set(recs.map((x) => x[1]).filter(Boolean))] };
+  }
+  async function nactiZaznamy(o) {
+    const [data] = await Promise.all([nactiVyp(kmenObehu(o)), nactiChyby(kmenObehu(o))]);
+    if (!data || obeh !== o) return;
+    const dnes = provozniDen(), den = data[dnes] || {};
+    for (const [por, sp] of Object.entries(den)) for (const [tid, rec] of Object.entries(sp)) {
+      const r = bezChyb(`${kmenObehu(o)}/${por}`, dnes, rec);
+      if (r) ZAZN[tid] = r; else delete ZAZN[tid];
+    }
+    kresliSpoje(); nahled();
+  }
+  const DNY = ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'];
+  async function ukazHistorii() {
+    const box = $('historie');
+    if (!box.hidden) { box.hidden = true; return; }
+    const o = obeh; if (!o) return;
+    box.hidden = false; box.innerHTML = '<div class="tsub">Načítám historii vypravení…</div>';
+    await Promise.all([nactiVyp(kmenObehu(o), true), nactiChyby(kmenObehu(o), true)]);
+    if (obeh !== o) return;
+    kresliHistorii();
+  }
+  function kresliHistorii() {
+    const box = $('historie'), o = obeh;
+    if (!o || box.hidden) return;
+    const c = vypCache[kmenObehu(o)], data = c && c.data;
+    const otevreno = new Set([...box.querySelectorAll('.den')].filter((e) => !e.querySelector('.dsp').hidden).map((e) => e.dataset.d));
+    if (!data) { box.innerHTML = '<div class="tsub">Historii se nepodařilo načíst (bez internetu, nebo ještě neběží záznam na GitHubu).</div>'; return; }
+    const por = porObehu(o);
+    const dny = Object.keys(data).filter((d) => data[d][por]).sort().reverse();
+    if (!dny.length) { box.innerHTML = `<div class="tsub">Pro oběh ${esc(o.o)} zatím není nic zaznamenáno. Záznam se ukládá od chvíle, kdy na GitHubu běží „Vypraveni vozu“, a drží se 60 dní.</div>`; return; }
+    const odkaz = (v) => `<a class="link" href="${esc(SA_URL(v))}" target="_blank" rel="noopener">${esc(v)}</a>`;
+    const dnes = provozniDen(), vcera = provozniDen(1);
+    box.innerHTML = `<div class="tsub" style="margin-bottom:4px">Historie vypravení oběhu ${esc(o.o)} (posledních 60 dní)</div>` + dny.map((d) => {
+      const sp = data[d][por]; const vsechny = Object.entries(sp).sort((a, b) => String(a[1][2]).localeCompare(String(b[1][2])));
+      const recs = vsechny.map(([t, x]) => [t, bezChyb(o.o, d, x)]).filter(([, x]) => x);
+      const vozy = [...new Set(recs.flatMap(([, x]) => String(x[0]).split('+')))];
+      const ch = VYPCHYBY[klicChyb(o.o, d)] || new Set();
+      const vsechnyVozy = [...new Set(vsechny.flatMap(([, x]) => String(x[0]).split('+')))];
+      const sprava = jeEditor() ? `<div class="chyby">${vsechnyVozy.map((v) => ch.has(v)
+        ? `<div><s>${esc(v)}</s> – označeno jako chyba · <button class="link" data-den="${esc(d)}" data-vuz="${esc(v)}" data-ch="0">vrátit</button></div>`
+        : `<div>${esc(v)} · <button class="link" data-den="${esc(d)}" data-vuz="${esc(v)}" data-ch="1">označit jako chybu</button></div>`).join('')}</div>` : '';
+      const dop = [...new Set(recs.map(([, x]) => x[1]).filter(Boolean))];
+      const [y, m, dd] = d.split('-').map(Number); const dt = new Date(y, m - 1, dd);
+      const nazev = d === dnes ? 'dnes' : d === vcera ? 'včera' : `${DNY[dt.getDay()]} ${dd}. ${m}.`;
+      const radky = recs.map(([tid, x]) => { const s = R && R.spoje[tid];
+        const popis = s ? `${esc(s.linka)} · ${hhmm(s.odj)} ${esc(s.z)} – ${esc(s.do)}` : `spoj ${esc(tid)} (zaznamenán ${esc(x[2] || '')})`;
+        return `<div>${popis} · vůz ${String(x[0]).split('+').map(odkaz).join('+')}</div>`; }).join('');
+      return `<div class="den" data-d="${esc(d)}"><button type="button"><b>${nazev}</b><span>${vozy.length ? vozy.map(esc).join(', ') : '—'}${dop.length ? ' · ' + esc(dop.join(', ')) : ''} ›</span></button><div class="dsp"${otevreno.has(d) ? '' : ' hidden'}>${radky}${sprava}</div></div>`;
+    }).join('');
+    box.querySelectorAll('.chyby button').forEach((b) => b.addEventListener('click', () => oznacChybu(o, b.dataset.den, b.dataset.vuz, b.dataset.ch === '1')));
+    box.querySelectorAll('.den > button').forEach((b) => b.addEventListener('click', () => { const x = b.nextElementSibling; x.hidden = !x.hidden; }));
+    box.querySelectorAll('.den > button a').forEach((a) => a.addEventListener('click', (e) => e.stopPropagation()));
   }
 
   function kresliSpoje() {
@@ -2099,14 +2241,16 @@ if (typeof document !== 'undefined') (function () {
     const lo = live && live.obeh[obeh.o.toUpperCase()];
     const proc = live && live.dohledano[obeh.o.toUpperCase()];
     const odkazVozu = (v) => `<a class="link" href="${esc(SA_URL(v))}" target="_blank" rel="noopener">${esc(v)}</a>`;
-    $('obehLive').innerHTML = !live ? (tokenGolemio() ? 'Vůz a dopravce: Golemio nenačteno (viz chyba dole u tokenu)' : '') : lo
+    const zz = zaznamObehu(obeh);
+    $('obehLive').innerHTML = (!live || !lo) && zz ? `Dnes zaznamenáno: vůz ${zz.vozy.map(odkazVozu).join(', ')}${zz.dopravci.length ? ' · ' + esc(zz.dopravci.join(', ')) : ''}`
+      : !live ? (tokenGolemio() ? 'Vůz a dopravce: Golemio nenačteno (viz chyba dole u tokenu)' : '') : lo
       ? `${esc(lo.zdroj ? 'Naposledy (' + lo.zdroj + ')' : 'Teď v provozu')}: ${lo.vozy.length ? 'vůz ' + lo.vozy.map(odkazVozu).join(', ') : 'číslo vozu neznámé'}${lo.dopravci.length ? ' · ' + esc(lo.dopravci.join(', ')) : ''}`
       : esc(`Vůz a dopravce: ${proc || 'oběh teď nejede'}`);
     if (live && lo && proc === 'hledám…') $('obehLive').innerHTML += ' · <span>dohledávám vozy u spojů…</span>';
     const otevrene = new Set([...document.querySelectorAll('.trip.open')].map((e) => e.dataset.t));
     $('spoje').innerHTML = obeh.s.map((tid) => {
-      const s = S[tid], vTed = live && live.trip[tid], v = vTed || (live && live.hist && live.hist[tid]);
-      const sub = v ? [vTed ? 'teď jede' : '', v[0] ? 'vůz ' + odkazVozu(v[0]) : '', v[1] ? esc(v[1]) : ''].filter(Boolean).join(' · ') : '';
+      const s = S[tid], vTed = live && live.trip[tid], vH = live && live.hist && live.hist[tid], vZ = ZAZN[tid], v = bezChyb(obeh.o, provozniDen(), vTed || vH || vZ);
+      const sub = v ? [vTed ? 'teď jede' : (!vH && vZ ? 'zaznamenáno ' + esc(vZ[2] || '') : ''), v[0] ? 'vůz ' + String(v[0]).split('+').map(odkazVozu).join('+') : '', v[1] ? esc(v[1]) : ''].filter(Boolean).join(' · ') : '';
       const op = otevrene.has(tid);
       return `<div class="trip${op ? ' open' : ''}" data-t="${esc(tid)}">
         <div class="trow">
@@ -2158,6 +2302,57 @@ if (typeof document !== 'undefined') (function () {
     $('nahled').innerHTML = aktualniHtml().replace(/<br>\n/g, '<br>');  // v <pre> by \n zdvojil řádky
     $('nahled').querySelectorAll('a').forEach((a) => { a.target = '_blank'; a.rel = 'noopener'; a.className = 'link'; });
     stavLista();
+  }
+
+  /* ---------- export pro Palubák: { format: 'palubak-turnusy', turnusy: { "347171": [{l, s, od}, …] } } ----------
+     kód turnusu = kmenová linka (3 číslice) + pořadí (2 číslice) + typ dne (1 po–pá, 2 so, 3 ne) */
+  function exportPalubak() {
+    const st = $('palStav');
+    if (!R) { st.textContent = 'Jízdní řády se ještě načítají.'; return; }
+    const chci = new Set($('palLinky').value.split(/[\s,;]+/).map((x) => x.replace(/\D/g, '')).filter(Boolean));
+    const cas = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;   // jako GTFS (i 24:51)
+    const typyDne = [[1, [0, 1, 2, 3, 4]], [2, [5]], [3, [6]]];
+    const dnes = (new Date().getDay() + 6) % 7;
+    const vyber = {};   // kód -> { o, skore }
+    let bezCisla = 0;
+    for (const o of R.obehy) {
+      const kmen = String(o.kmen).replace(/\D/g, '');
+      if (!kmen || (chci.size && !chci.has(kmen))) { if (!kmen) bezCisla++; continue; }
+      const por = String(o.poradi).replace(/\D/g, '');
+      if (!por) { bezCisla++; continue; }
+      const m = o.maska || Array(7).fill(true);
+      for (const [typ, dny] of typyDne) {
+        const pocet = dny.filter((d) => m[d]).length;
+        if (!pocet) continue;
+        const kod = kmen.slice(-3).padStart(3, '0') + por.padStart(2, '0') + typ;
+        // víc variant na jeden typ dne (po–čt / pá): vlastní úprava > víc dnů > jede dnes
+        const skore = (o.vlastni ? 100 : 0) + pocet * 2 + (m[dnes] && dny.includes(dnes) ? 1 : 0);
+        if (!vyber[kod] || skore > vyber[kod].skore) vyber[kod] = { o, skore };
+      }
+    }
+    const turnusy = {};
+    let spoju = 0, vynechano = 0;
+    for (const kod of Object.keys(vyber).sort()) {
+      const out = [];
+      for (const tid of vyber[kod].o.s) {
+        const sp = R.spoje[tid];
+        const cis = String(tid).split('_')[1];
+        if (!sp || String(tid).startsWith('v:') || !cis) { vynechano++; continue; }   // vlastní linky nemají spoj v GTFS
+        out.push({ l: String(sp.linka), s: cis, od: cas(sp.odj) });
+      }
+      if (out.length) { turnusy[kod] = out; spoju += out.length; }
+    }
+    const n = Object.keys(turnusy).length;
+    if (!n) { st.textContent = chci.size ? 'Pro zadané linky se nenašly žádné oběhy.' : 'Nejsou žádné oběhy k exportu.'; return; }
+    const data = { format: 'palubak-turnusy', vytvoreno: new Date().toISOString(), zdroj: 'VVJŘ PID ' + APP_VERZE, turnusy };
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'turnusy_palubak.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+    st.textContent = `Staženo: ${n} turnusů, ${spoju} spojů (${(blob.size / 1048576).toFixed(1)} MB).`
+      + (vynechano ? ` ${vynechano} spojů vlastních linek vynecháno (Palubák je v GTFS nenajde).` : '')
+      + (bezCisla ? ` ${bezCisla} oběhů bez číselné linky/pořadí vynecháno.` : '');
   }
 
   async function kopiruj() {
