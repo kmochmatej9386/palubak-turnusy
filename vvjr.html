@@ -384,7 +384,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-25.1';
+const APP_VERZE = '2026-11-25.2';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -529,6 +529,32 @@ function popisDnu(m) {
 }
 const prirozene = (a, b) => String(a).localeCompare(String(b), 'cs', { numeric: true });
 
+// ID spoje PID = linka_číslo_verze (např. 202_2548_261019). Po vydání nového JŘ dostane stejný spoj novou verzi
+// (202_2548_261119) a v turnusy.json je pořád pod starou. Takový spoj se najde podle linky a čísla spoje (nejnovější verze).
+const turnusyZaklady = new WeakMap();
+function najdiTurnus(turnusy, tid) {
+  if (!turnusy) return null;
+  const v = turnusy[tid];
+  if (v) return v;
+  const m = /^(\d+_\d+)_(\d{6})$/.exec(String(tid));
+  if (!m) return null;
+  let z = turnusyZaklady.get(turnusy);
+  if (!z) {
+    z = new Map();
+    for (const k of Object.keys(turnusy)) {
+      const x = /^(\d+_\d+)_(\d{6})$/.exec(k);
+      if (!x) continue;
+      const b = z.get(x[1]);
+      if (!b || x[2] > b[0]) z.set(x[1], [x[2], turnusy[k]]);
+    }
+    turnusyZaklady.set(turnusy, z);
+  }
+  const b = z.get(m[1]);
+  if (!b) return null;
+  turnusy[tid] = b[1];   // dál se spoj hledá rovnou pod novým ID
+  return b[1];
+}
+
 async function zpracuj(blob, turnusy, odData, progress = () => {}) {
   const zip = await zipObsah(blob);
   const dny = [];
@@ -565,7 +591,7 @@ async function zpracuj(blob, turnusy, odData, progress = () => {}) {
     const aktivni = [];
     for (let i = 0; i < dny.length; i++) if (jede(r.service_id, dny[i])) aktivni.push(i);
     if (!aktivni.length) return;
-    if (!turnusSpoje(r.trip_id)) { bezPoradi++; return; }
+    if (!najdiTurnus(turnusy, r.trip_id)) { bezPoradi++; return; }
     const [linka, dopravce] = linky[r.route_id] || [r.route_id, ''];
     spoje[r.trip_id] = { linka, dopravce, sid: r.service_id, dny: aktivni, t: [] };
   });
@@ -791,32 +817,9 @@ if (typeof document !== 'undefined') (function () {
     const r = await fetch(TURNUSY_URL, { cache: 'no-cache' });
     if (!r.ok) throw new Error(`turnusy.json: HTTP ${r.status}`);
     turnusy = await r.json();
-    turnusyZaklad = null;
   }
 
-  // ID spoje PID = linka_číslo_verze (např. 202_2548_261019). Po vydání nového JŘ dostane stejný spoj novou verzi
-  // (202_2548_261119) a v turnusy.json je pořád pod starou. Takový spoj se najde podle linky a čísla spoje (nejnovější verze).
-  let turnusyZaklad = null;
-  function turnusSpoje(tid) {
-    if (!turnusy) return null;
-    const v = turnusy[tid];
-    if (v) return v;
-    const m = /^(\d+_\d+)_(\d{6})$/.exec(String(tid));
-    if (!m) return null;
-    if (!turnusyZaklad) {
-      turnusyZaklad = new Map();
-      for (const k of Object.keys(turnusy)) {
-        const x = /^(\d+_\d+)_(\d{6})$/.exec(k);
-        if (!x) continue;
-        const b = turnusyZaklad.get(x[1]);
-        if (!b || x[2] > b[0]) turnusyZaklad.set(x[1], [x[2], turnusy[k]]);
-      }
-    }
-    const b = turnusyZaklad.get(m[1]);
-    if (!b) return null;
-    turnusy[tid] = b[1];   // dál se spoj hledá rovnou pod novým ID
-    return b[1];
-  }
+  function turnusSpoje(tid) { return najdiTurnus(turnusy, tid); }
 
   async function nactiGolemio() {
     const token = tokenGolemio();
