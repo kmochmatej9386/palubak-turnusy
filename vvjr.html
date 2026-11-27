@@ -402,7 +402,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.1';
+const APP_VERZE = '2026-11-27.2';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -792,8 +792,10 @@ function textVVJR(o, spoje, vybrane, live, chciDopravce, chciVuz, html = false) 
    zastávky, šedý štítek linka/pořadí při nástupu na linku), box Zatažení a Poznámky. */
 const VJR_LIB = {
   jspdf: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
-  font: 'https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37.3/ttf/DejaVuSansCondensed.ttf',
-  fontB: 'https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37.3/ttf/DejaVuSansCondensed-Bold.ttf',
+  // písma metricky shodná s Arial / Arial Narrow / Times New Roman (Liberation, licence SIL OFL), leží vedle aplikace
+  fonty: { A: ['LiberationSans-Regular', 'LiberationSans-Bold', 'LiberationSans-BoldItalic'],
+    N: ['LiberationSansNarrow-Regular', 'LiberationSansNarrow-Bold'], T: ['LiberationSerif-Regular'] },
+  cesta: './fonts/',
 };
 let vjrFonty = null;
 async function vjrNactiKnihovny() {
@@ -805,16 +807,17 @@ async function vjrNactiKnihovny() {
     });
   }
   if (!vjrFonty) {
-    const b64 = async (url) => {
-      const r = await fetch(url);
+    const b64 = async (jm) => {
+      const r = await fetch(VJR_LIB.cesta + jm + '.ttf');
       if (!r.ok) throw new Error('Písmo se nepodařilo stáhnout');
       const u = new Uint8Array(await r.arrayBuffer());
       let s = '';
       for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
       return btoa(s);
     };
-    const [n, b] = await Promise.all([b64(VJR_LIB.font), b64(VJR_LIB.fontB)]);
-    vjrFonty = { n, b };
+    const f = {};
+    await Promise.all(Object.values(VJR_LIB.fonty).flat().map(async (jm) => { f[jm] = await b64(jm); }));
+    vjrFonty = f;
   }
 }
 
@@ -920,158 +923,217 @@ function vjrProrid(sada, MEZ = 4) {
 
 const vjrCas = (m) => m == null ? '' : `${Math.floor(m / 60) % 24}:${String(m % 60).padStart(2, '0')}`;
 const vjrDatum = (d) => `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
-const vjrTisk = (d) => `${vjrDatum(d)} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+const vjrTisk = (d, carka) => `${vjrDatum(d)}${carka ? ',' : ''} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
 function vjrTypDne(m) {
   if (!m) return '';
   const k = m.map((x) => x ? 1 : 0).join('');
-  return { '1111100': 'Pracovní den', '0000011': 'Sobota + Neděle', '0000010': 'Sobota', '0000001': 'Neděle',
+  return { '1111100': 'Pracovní den', '0000011': 'Sobota+Neděle', '0000010': 'Sobota', '0000001': 'Neděle',
     '1111111': 'Denně', '1111000': 'Po – Čt', '0000100': 'Pátek' }[k] || popisDnu(m);
 }
 
-/* opt: { firma, provozovna, typVozu, cisGraf, platiOd, typDne, vyjezd, zatazeni, poznamky, sloupcu } */
+
+/* Rozměry převzaté z originálních VJŘ DPP (A4, body). Autobusy: 10 sloupců, Arial Narrow 9/11;
+   tramvaje (linka do 99): 6 širokých sloupců, Arial 12/14. */
+const VJR_STYL = {
+  bus: { sl: 10, x0: 116.9, sw: 45.9, rv: 14.52, pad: 1, zast: 10, zastX: 21, base: 10.3,
+    cas: ['N', 9, 27.3], tucne: ['N', 11, 29.8], sip: [2.4, 9], stitek: ['N', 9] },
+  tram: { sl: 6, x0: 150.24, sw: 70.84, rv: 15.25, pad: 2, zast: 11, zastX: 22.2, base: 12,
+    cas: ['A', 12, 43], tucne: ['A', 14, 45.3], sip: [3.2, 12], stitek: ['A', 12] },
+};
+
+/* opt: { firma, provozovna, typVozu, cisGraf, platiOd, typDne, vyjezd, zatazeni, poznamky, vsechny, styl } */
 function vjrPdf(o, spoje, opt = {}) {
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
-  doc.addFileToVFS('vjr.ttf', vjrFonty.n); doc.addFont('vjr.ttf', 'vjr', 'normal');
-  doc.addFileToVFS('vjrb.ttf', vjrFonty.b); doc.addFont('vjrb.ttf', 'vjr', 'bold');
-  const W = 595.28, H = 841.89, L = 24, P = W - 24, SIRKA = P - L;
-  const NAZEV = 104, SL = opt.sloupcu || 8, SW = (SIRKA - NAZEV) / SL;
-  const RV = 12, SV = 10;   // výška řádku zastávky / řádku se štítky
+  const doc = new jsPDF({ unit: 'pt', format: [595, 842] });
+  for (const [rod, jmena] of Object.entries(VJR_LIB.fonty)) {
+    const styly = rod === 'A' ? ['normal', 'bold', 'bolditalic'] : ['normal', 'bold'];
+    jmena.forEach((jm, i) => { doc.addFileToVFS(jm + '.ttf', vjrFonty[jm]); doc.addFont(jm + '.ttf', rod, styly[i]); });
+  }
+  const tram = opt.styl ? opt.styl === 'tram' : /^\d+$/.test(String(o.kmen)) && +o.kmen < 100;
+  const S = VJR_STYL[tram ? 'tram' : 'bus'];
+  const XL = 20.05, XP = 575.05, VNITR_DOLE = 770.9;
   const ted = new Date();
-  const f = (size, bold) => { doc.setFont('vjr', bold ? 'bold' : 'normal'); doc.setFontSize(size); };
-  const txt = (s, x, y, o2) => doc.text(String(s), x, y, o2);
+  const f = (rod, size, styl = 'normal') => { doc.setFont(rod, styl); doc.setFontSize(size); };
+  const txt = (s, x, y, al) => doc.text(String(s), x, y, al ? { align: al } : undefined);
+  const sirka = (s) => doc.getTextWidth(String(s));
+  const cara = (x1, y1, x2, y2, w = 0.95) => { doc.setLineWidth(w); doc.line(x1, y1, x2, y2); };
+  const dvojita = (y) => { cara(XL, y + 0.5, XP, y + 0.5); cara(XL, y + 2.45, XP, y + 2.45); };   // y = horní hrana
   const R = vjrRozvrh(o, spoje, opt.vsechny);
 
-  // ---- bloky po SL sloupcích ----
-  const bloky = [];
-  for (let i = 0; i < R.tids.length; i += SL) {
-    const sl = R.tids.slice(i, i + SL);
-    const linky = R.linky.filter((l) => sl.some((t) => spoje[t].linka === l));
-    const v = linky.reduce((a, l) => a + SV + R.sady[l].zastavky.length * RV, SV) + 6;
-    bloky.push({ sl, linky, v });
+  // šipka směru (vektorově – originál má vlastní font "Timetable"): ↓ tenká, ↑ tučná
+  function sipka(x, yb, dolu, pt) {
+    const k = pt / 9, w = 4.4 * k, cx = x + w / 2, h = 6.6 * k, hw = 1.7 * k, hh = 2.6 * k;
+    const top = yb - h;
+    doc.setFillColor(0);
+    if (dolu) {
+      cara(cx, top, cx, yb - hh + 0.3, 0.75 * k);
+      doc.triangle(cx - hw, yb - hh, cx + hw, yb - hh, cx, yb, 'F');
+    } else {
+      cara(cx, yb, cx, top + hh - 0.3, 1.15 * k);
+      doc.triangle(cx - hw, top + hh, cx + hw, top + hh, cx, top, 'F');
+    }
   }
+
+  // ---- bloky: sloupce po S.sl spojích, řádky = zastávky všech linek, které v bloku jedou ----
+  const bloky = [];
+  // tramvaje: nový blok při změně linky (jako v originálu), autobusy: linky v bloku pod sebou
+  const skupiny = [];
+  for (const t of R.tids) {
+    const g = skupiny[skupiny.length - 1];
+    if (g && g.length < S.sl && !(tram && spoje[g[0]].linka !== spoje[t].linka)) g.push(t); else skupiny.push([t]);
+  }
+  for (const sl of skupiny) {
+    const linky = R.linky.filter((l) => sl.some((t) => spoje[t].linka === l));
+    const radky = [], mapa = {};          // radky: { l, r, zast }; mapa[l][r] = index v bloku
+    for (const l of linky) {
+      const sada = R.sady[l], pouzite = new Set();
+      for (const t of sl) { const s = sada.sloupce[t]; if (s) for (let r = s.min; r <= s.max; r++) pouzite.add(r); }
+      mapa[l] = {};
+      sada.zastavky.forEach((z, r) => { if (pouzite.has(r)) { mapa[l][r] = radky.length; radky.push({ l, r, zast: z }); } });
+    }
+    const n = radky.length + 2 * S.pad;
+    bloky.push({ sl, linky, radky, mapa, n, v: n * S.rv });
+  }
+
+  // ---- text Výjezd / Zatažení: úseky oddělené " - ", časy tučně, zalomení s odsazením ----
+  function trasaRadky(nadpis, text) {
+    f('A', 11, 'bold');
+    const x1 = 22.2 + sirka(nadpis + ':') + 3.2, XODS = 65.9, MAX = XP - 6;
+    const useky = String(text).split(/\s+-\s+/).map((u) => u.trim()).filter(Boolean);
+    const out = [[]];
+    let x = x1;
+    const delka = (u) => u.split(/\s+/).reduce((a, w) => { f('A', 11, /^\d{1,2}:\d{2}$/.test(w) ? 'bold' : 'normal'); return a + sirka(w + ' '); }, 0);
+    useky.forEach((u, i) => {
+      const pre = i ? '- ' : '';
+      f('A', 11); const wp = sirka(pre);
+      const w = wp + delka(u);
+      if (i && x + w > MAX && out[out.length - 1].length) { out.push([]); x = XODS; }
+      out[out.length - 1].push({ pre, u, x });
+      x += w;
+    });
+    return out;
+  }
+  const trasaV = (n) => n ? 15.2 * n - 0.9 : 0;
 
   // ---- rozdělení na listy ----
-  const HLAV = 84;                // konec hlavičky (y)
-  const PATA = H - 30;            // nad patičkou "Vytištěno"
-  const vyjezdV = (s) => Math.max(44, 12 + zalomit(s).length * 11);
-  function zalomit(s) {
-    f(8);
-    const out = [];
-    for (const odst of String(s || '').split('\n')) out.push(...doc.splitTextToSize(odst, SIRKA - 60));
-    return out.length ? out : [''];
-  }
-  const listy = [[]];
-  let y = HLAV + vyjezdV(opt.vyjezd);
+  const HLAV_KONEC = 118.9;
+  const POZN_MIN = 112;
+  const prvniRadky = opt.vyjezd ? trasaRadky('Výjezd', opt.vyjezd) : [];
+  const posledniRadky = opt.zatazeni ? trasaRadky('Zatažení', opt.zatazeni) : [];
+  const listy = [{ bloky: [], vyjezd: true }];
+  let y = HLAV_KONEC + (prvniRadky.length ? trasaV(prvniRadky.length) : 42.1);
   for (const b of bloky) {
-    if (y + b.v > PATA - 10 && listy[listy.length - 1].length) { listy.push([]); y = HLAV; }
-    listy[listy.length - 1].push(b); y += b.v;
+    if (y + 2.9 + b.v > VNITR_DOLE && listy[listy.length - 1].bloky.length) { listy.push({ bloky: [] }); y = HLAV_KONEC; }
+    listy[listy.length - 1].bloky.push(b); y += 1.5 + b.v;
   }
-  const konecV = vyjezdV(opt.zatazeni) + 70;     // Zatažení + aspoň kus Poznámek
-  if (y + konecV > PATA) { listy.push([]); }
+  // zatažení patří na poslední list nahoru pod hlavičku – musí se tam vejít i s Poznámkami
+  let posl = listy[listy.length - 1];
+  const vyskaListu = (l) => (l.vyjezd ? (prvniRadky.length ? trasaV(prvniRadky.length) : 42.1) : 0)
+    + (posledniRadky.length ? trasaV(posledniRadky.length) + (l.vyjezd && prvniRadky.length ? 0 : 0) : 0)
+    + l.bloky.reduce((a, b) => a + 1.5 + b.v, 0);
+  if (HLAV_KONEC + vyskaListu(posl) + 3 + POZN_MIN > VNITR_DOLE) { listy.push({ bloky: [] }); posl = listy[listy.length - 1]; }
 
   const firma = opt.firma || 'Dopravní podnik hlavního města Prahy, akciová společnost';
-  listy.forEach((bl, li) => {
+  listy.forEach((list, li) => {
     if (li) doc.addPage();
     doc.setDrawColor(0); doc.setTextColor(0);
-    f(7.5); txt(vjrTisk(ted), W / 2, 16, { align: 'center' });
+    f('A', 10); txt(vjrTisk(ted), 297.5, 10.3, 'center');
+    // rám stránky (dvojitý)
+    cara(18.1, 25.1, 18.1, 773.3); cara(576.95, 25.1, 576.95, 773.3);
+    cara(XL, 27, XL, 771.4); cara(XP, 27, XP, 771.4);
+    cara(18.1, 25.1, 576.95, 25.1); cara(XL, 27, XP, 27);
+    cara(18.1, 773.3, 576.95, 773.3); cara(XL, 771.4, XP, 771.4);
     // hlavička
-    doc.setLineWidth(0.8); doc.rect(L, 22, SIRKA, HLAV - 22);
-    doc.setLineWidth(0.5);
-    f(7.5, true); txt(firma, W / 2, 31, { align: 'center' });
-    doc.line(L, 34, P, 34); doc.line(L, 60, P, 60); doc.line(L, 72, P, 72);
-    doc.line(P - 44, 34, P - 44, 60);
-    f(8.5); txt('Linka:', L + 4, 51);
-    f(17, true); txt(String(o.kmen), L + 31, 52);
-    f(8.5); txt('Pořadí:', L + 82, 51);
-    f(17, true); txt(String(o.poradi), L + 150, 52, { align: 'right' });
-    f(8.5); txt('Provozovna:', L + 160, 51);
-    f(12, true); txt(opt.provozovna || '', L + 210, 52);
-    f(12, true); txt(opt.typDne || vjrTypDne(o.maska), P - 50, 51, { align: 'right' });
-    f(7.5, true); txt('List', P - 22, 43, { align: 'center' }); txt(`č. ${li + 1}/${listy.length}`, P - 22, 54, { align: 'center' });
-    f(7, true);
-    txt('Typ vozu: ' + (opt.typVozu || ''), L + 4, 69);
-    txt('Čís.graf.: ' + (opt.cisGraf || ''), L + 270, 69);
-    txt('Platí od: ' + (opt.platiOd || ''), P - 4, 69, { align: 'right' });
-    let y = HLAV;
-    const box = (nadpis, text) => {
-      const radky = zalomit(text), v = vyjezdV(text);
-      doc.setLineWidth(0.8); doc.rect(L, y, SIRKA, v);
-      if (text) {
-        f(8, true); txt(nadpis + ':', L + 3, y + 11);
-        const w = doc.getTextWidth(nadpis + ': ');
-        f(8); radky.forEach((r, i) => txt(r, L + 3 + (i ? 22 : w), y + 11 + i * 11));
-      }
-      y += v;
-    };
-    if (li === 0) box('Výjezd', opt.vyjezd);
-
-    for (const b of bl) {
-      const x0 = L + NAZEV;
-      const top = y;
-      y += 4;
-      // které sloupce mají štítek nahoře / dole u sady linky
-      b.linky.forEach((l, si) => {
-        const sada = R.sady[l];
-        // řádek štítků nad sadou
-        const stitekRadek = (yy, filtr) => {
-          b.sl.forEach((t, c) => {
-            if (spoje[t].linka !== l || !R.stitky[t]) return;
-            if (!filtr(sada.sloupce[t])) return;
-            doc.setFillColor(200, 200, 200); doc.rect(x0 + c * SW + 2, yy - 7.6, SW - 8, 9.2, 'F');
-            f(6.5, true); txt(R.stitky[t], x0 + c * SW + 2 + (SW - 8) / 2, yy - 0.5, { align: 'center' });
-          });
-        };
-        y += SV;
-        stitekRadek(y - 1, (s) => s.smer === 1);
-        const y1 = y;
-        sada.zastavky.forEach((z, r) => {
-          const yr = y + RV - 2.8;
-          let fs = 8.3; f(fs);
-          while (doc.getTextWidth(z) > NAZEV - 4 && fs > 5.4) { fs -= 0.3; f(fs); }
-          txt(z, L + 2, yr);
-          b.sl.forEach((t, c) => {
-            const s = sada.sloupce[t];
-            if (!s) return;
-            const cas = s.casy[r];
-            const x = x0 + c * SW;
-            if (cas == null) {
-              if (r > s.min && r < s.max) { f(7.5); txt('--', x + 12, yr); }
-              return;
-            }
-            const tucne = r === s.prvniRadek;
-            f(7, true); txt(s.smer === 1 ? '↓' : '↑', x + 2, yr);
-            f(tucne ? 11 : 8, tucne); txt(vjrCas(cas), x + 9, yr + (tucne ? 0.5 : 0));
-          });
-          y += RV;
-          if (r % 2 === 1 && r < sada.zastavky.length - 1) { doc.setLineWidth(0.5); doc.line(L, y, P, y); }
-        });
-        // štítek pod sadou (spoj začíná dole – jede nahoru)
-        if (si === b.linky.length - 1) { y += SV; stitekRadek(y - 1, (s) => s.smer === -1); }
-        else {
-          // u další sady by se štítek ↑ spoje míchal se štítkem ↓ – dát ho do mezery pod sadu
-          const yy = y + SV;
-          b.sl.forEach((t, c) => {
-            if (spoje[t].linka !== l || !R.stitky[t] || sada.sloupce[t].smer !== -1) return;
-            doc.setFillColor(200, 200, 200); doc.rect(x0 + c * SW + 2, yy - 7.6, SW - 8, 9.2, 'F');
-            f(6.5, true); txt(R.stitky[t], x0 + c * SW + 2 + (SW - 8) / 2, yy - 0.5, { align: 'center' });
-          });
+    f('A', 10, 'bold'); txt(firma, 297.5, 37.2, 'center');
+    cara(XL, 42, XP, 42);
+    f('T', 12); txt('Linka:', 27.2, 60); txt('Pořadí:', 102.2, 60); txt('Provozovna:', 183.6, 60);
+    f('A', 20, 'bold'); txt(o.kmen, 61.2, 62.4); txt(o.poradi, 177.3, 62.4, 'right');
+    f('A', 16, 'bold'); txt(opt.provozovna || '', 249.2, 61.6);
+    txt(opt.typDne || vjrTypDne(o.maska), 522.6, 61.6, 'right');
+    cara(530.15, 42.5, 530.15, 71);
+    f('A', 10, 'bold'); txt('List', 553.5, 54.4, 'center'); txt(`č. ${li + 1}/${listy.length}`, 553.5, 67.3, 'center');
+    dvojita(71);
+    txt('Typ vozu: ' + (opt.typVozu || ''), 25.7, 83.5);
+    txt('Čís.graf.: ' + (opt.cisGraf || ''), 282.4, 83.5);
+    txt('Platí od: ' + (opt.platiOd || ''), 453.6, 83.5);
+    cara(XL, HLAV_KONEC, XP, HLAV_KONEC);
+    let y = HLAV_KONEC;
+    const trasa = (nadpis, radky) => {
+      radky.forEach((r, i) => {
+        const yb = y + 12.4 + i * 15.2;
+        if (i === 0) { f('A', 11, 'bold'); txt(nadpis + ':', 22.2, yb); }
+        for (const { pre, u, x } of r) {
+          let xx = x;
+          if (pre) { f('A', 11); txt(pre, xx, yb); xx += sirka(pre); }
+          for (const w of u.split(/\s+/)) { f('A', 11, /^\d{1,2}:\d{2}$/.test(w) ? 'bold' : 'normal'); txt(w, xx, yb); xx += sirka(w + ' '); }
         }
-        void y1;
       });
-      y = top + b.v;
-      doc.setLineWidth(0.8); doc.line(L, y, P, y);
+      y += trasaV(radky.length);
+    };
+    let ohraniceno = false;
+    if (list.vyjezd) {
+      if (prvniRadky.length) trasa('Výjezd', prvniRadky); else y += 42.1;
+      ohraniceno = true;
     }
-    if (li === listy.length - 1) {
-      y += 6;
-      if (opt.zatazeni) box('Zatažení', opt.zatazeni);
-      // Poznámky do konce listu
-      const v = PATA - y;
-      doc.setLineWidth(0.8); doc.rect(L, y, SIRKA, v);
-      f(8.5, true); txt('Poznámky:', L + 3, y + 11);
-      if (opt.poznamky) { f(8); zalomit(opt.poznamky).forEach((r, i) => txt(r, L + 3, y + 24 + i * 11)); }
+    if (list === posl && posledniRadky.length) { trasa('Zatažení', posledniRadky); ohraniceno = true; }
+    if (ohraniceno) { dvojita(y); y += 1.5; }
+
+    for (const b of list.bloky) {
+      const top = y + 1.4;
+      const rTop = (g) => top + g * S.rv;                 // horní hrana globálního řádku
+      const prvniZast = S.pad;
+      // jména zastávek + tečkované oddělovače po dvou řádcích
+      b.radky.forEach((rd, i) => {
+        const g = prvniZast + i;
+        let fs = S.zast; f('A', fs);
+        while (sirka(rd.zast) > S.x0 - S.zastX - 2 && fs > 6.5) { fs -= 0.2; f('A', fs); }
+        txt(rd.zast, S.zastX - (fs < S.zast ? 0.2 : 0), rTop(g) + S.base);
+        if (i % 2 === 1 && i < b.radky.length - 1) {
+          doc.setLineDashPattern([0.45, 0.45], 0); cara(XL, rTop(g + 1) - 0.7, XP, rTop(g + 1) - 0.7, 0.95); doc.setLineDashPattern([], 0);
+        }
+      });
+      // sloupce
+      b.sl.forEach((t, c) => {
+        const x = S.x0 + c * S.sw;
+        const l = spoje[t].linka, sada = R.sady[l], s = sada.sloupce[t];
+        const m = b.mapa[l];
+        s.casy.forEach((cas, r) => {
+          if (m[r] == null) return;
+          const yb = rTop(prvniZast + m[r]) + S.base;
+          if (cas == null) {
+            if (r > s.min && r < s.max) { f(S.cas[0], S.cas[1]); txt('--', x + S.cas[2], yb, 'right'); }
+            return;
+          }
+          const tucne = r === s.prvniRadek;
+          const [rod, pt, xr] = tucne ? S.tucne : S.cas;
+          sipka(x + S.sip[0], yb, s.smer === 1, S.sip[1]);
+          f(rod, pt, tucne ? 'bold' : 'normal'); txt(vjrCas(cas), x + xr, yb, 'right');
+        });
+        if (R.stitky[t] && s.prvniRadek >= 0) {
+          const g = prvniZast + m[s.prvniRadek] + (s.smer === 1 ? -1 : 1);
+          doc.setFillColor(192, 192, 192); doc.rect(x, rTop(g), S.sw, S.rv + 0.1, 'F');
+          f(S.stitek[0], S.stitek[1], 'bold'); txt(R.stitky[t], x + S.sw / 2, rTop(g) + (tram ? 11.6 : 10.1), 'center');
+        }
+      });
+      y = top + b.v - 1.5;
+      dvojita(y); y += 1.5;
     }
-    f(7.5); txt('Vytištěno ' + vjrTisk(ted), W / 2, H - 14, { align: 'center' });
+    if (list === posl) {
+      y += 1.4;
+      f('A', 11, 'bolditalic'); txt('Poznámky:', 21.1, y + 11.1);
+      if (opt.poznamky) {
+        f('A', 10);
+        const r = []; for (const odst of String(opt.poznamky).split('\n')) r.push(...doc.splitTextToSize(odst, XP - XL - 8));
+        r.forEach((t, i) => txt(t, 24, y + 25 + i * 12));
+      }
+      // tabulka na podpisy (prázdná, jako v originálu)
+      if (y < 660) {
+      const tx = [116.95, 231.55, 346.85, 461.45], ty = [699.75, 728.85, 743.35, 757.85];
+      for (const xx of tx) cara(xx, 699.75, xx, VNITR_DOLE, 0.3);
+      for (const yy of ty) cara(117, yy, XP, yy, 0.3);
+      }
+    }
+    f('A', 9); txt('Vytištěno ' + vjrTisk(ted, true), 297.5, 838.2, 'center');
   });
   return doc;
 }
@@ -2667,7 +2729,7 @@ if (typeof document !== 'undefined') (function () {
     try {
       await vjrNactiKnihovny();
       const doc = vjrPdf(obeh, R.spoje, opt);
-      const typ = { 'Pracovní den': 'PD', 'Sobota + Neděle': 'SONE', 'Sobota': 'SO', 'Neděle': 'NE' }[vjrTypDne(obeh.maska)] || 'X';
+      const typ = { 'Pracovní den': 'PD', 'Sobota+Neděle': 'SONE', 'Sobota': 'SO', 'Neděle': 'NE' }[vjrTypDne(obeh.maska)] || 'X';
       const jm = `VJR_${obeh.kmen}_${obeh.poradi}_${typ}${opt.platiOd ? '_' + opt.platiOd.replace(/\s/g, '') : ''}.pdf`.replace(/[\/\\:*?"<>|]/g, '_');
       doc.save(jm);
       $('vjrStav').textContent = 'Staženo: ' + jm;
