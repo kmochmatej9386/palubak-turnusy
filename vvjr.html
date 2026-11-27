@@ -75,6 +75,7 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); m
 .route td.t { font-variant-numeric: tabular-nums; white-space: nowrap; width: 1%; color: var(--muted); }
 .route td.t b { color: var(--text); font-weight: 600; }
 .route tr:first-child td:last-child, .route tr:last-child td:last-child { font-weight: 600; }
+.role-volby { display: grid; gap: 4px; margin-top: 4px; } .role-volby label { font-size: 14px; }
 .vjrf { display: grid; gap: 6px; } .vjrf .pole { box-sizing: border-box; margin: 0; font-family: inherit; }
 pre { font: 13px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; margin: 0; max-height: 340px; overflow: auto; }
 .empty { color: var(--muted); padding: 6px 0; }
@@ -361,14 +362,13 @@ button.primary:disabled { opacity: .4; cursor: default; }
     <div class="card" id="spravaDetail" hidden>
       <div class="head"><h2 id="spravaDetailNazev"></h2><button class="link" id="spravaZpet">zavřít</button></div>
       <div id="spravaRoleBox" hidden style="margin-bottom:10px">
-        <label class="tsub" for="spravaRole">Práva uživatele</label>
-        <select id="spravaRole">
-          <option value="">Uživatel – zapisuje jen svoje projetí</option>
-          <option value="editor">Editor oběhů – může vytvářet a upravovat oběhy</option>
-          <option value="spravce">Správce – projetí všech + editor oběhů</option>
-          <option value="bezvjr">BEZ VJŘ – jako uživatel, ale nevidí export VJŘ (PDF)</option>
-          <option value="blokovany">Zablokovaný – nemůže nic zapisovat</option>
-        </select>
+        <div class="tsub">Práva uživatele (lze zaškrtnout víc najednou; bez zaškrtnutí = běžný uživatel, zapisuje jen svoje projetí)</div>
+        <div id="spravaRole" class="role-volby">
+          <label><input type="checkbox" value="editor"> Editor oběhů – může vytvářet a upravovat oběhy</label>
+          <label><input type="checkbox" value="spravce"> Správce – projetí všech + editor oběhů</label>
+          <label><input type="checkbox" value="bezvjr"> BEZ VJŘ – nevidí export VJŘ (PDF)</label>
+          <label><input type="checkbox" value="blokovany"> Zablokovaný – nemůže nic zapisovat</label>
+        </div>
       </div>
       <div class="tok" style="margin-bottom:6px">
         <input type="text" id="spravaNoveEvc" class="pole" placeholder="Ev. č." style="margin:0;flex:1" inputmode="numeric">
@@ -405,7 +405,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.12';
+const APP_VERZE = '2026-11-27.13';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -1033,7 +1033,7 @@ function vjrPdf(o, spoje, opt = {}) {
     });
     return out;
   }
-  const trasaV = (n) => n ? 15.2 * n - 0.9 : 0;
+  const trasaV = (n) => n ? 15.2 * n + 4.5 : 0;   // s mezerou nad dvojitou čarou
 
   // ---- rozdělení na listy ----
   // opt.trasy = [{ nadpis: 'Výjezd'|'Přejezd'|'Zatažení', text, tid }] – řádek se píše na list, kde je spoj tid
@@ -1097,7 +1097,7 @@ function vjrPdf(o, spoje, opt = {}) {
       let i0 = 0;
       for (const t of tl) {
         t.radky.forEach((r, i) => {
-          const yb = y + 12.4 + (i0 + i) * 15.2;
+          const yb = y + 13.5 + (i0 + i) * 15.2;
           if (i === 0) { f('A', 11, 'bold'); txt(t.nadpis + ':', 22.2, yb); }
           for (const { pre, u, x } of r) {
             let xx = x;
@@ -1484,7 +1484,7 @@ if (typeof document !== 'undefined') (function () {
     $('spravaObnovit').addEventListener('click', nactiSpravu);
     $('spravaZpet').addEventListener('click', () => { spravaVybrany = null; $('spravaDetail').hidden = true; });
     $('spravaPridat').addEventListener('click', spravaPridat);
-    $('spravaRole').addEventListener('change', () => spravaNastavRoli(spravaVybrany, $('spravaRole').value));
+    $('spravaRole').addEventListener('change', () => spravaNastavRoli(spravaVybrany, [...$('spravaRole').querySelectorAll('input:checked')].map((i) => i.value)));
     $('spravaSdilet').addEventListener('click', () => spravaSdilet(true));
     $('spravaNesdilet').addEventListener('click', () => { if (confirm('Přestat sdílet token? Ostatním přestanou fungovat čísla vozů.')) spravaSdilet(false); });
     $('uctPrihlasit').addEventListener('click', () => uctAkce(false));
@@ -1655,7 +1655,7 @@ if (typeof document !== 'undefined') (function () {
   const nactiJson = (k, def) => { try { return JSON.parse(ls.get(k) || '') || def; } catch { return def; } };
   let projete = nactiJson('projete', {});        // evč -> { d: dopravce, t: 'RRRR-MM-DD', o: oběh }
   let zname = nactiJson('znameVozy', {});        // evč -> dopravce (vozy, které už aplikace viděla v Golemiu)
-  const cloud = { fb: null, user: null, jmeno: '', role: '' };
+  const cloud = { fb: null, user: null, jmeno: '', role: '', roles: new Set() };
   const klicProjete = () => cloud.user ? 'projete_' + cloud.user.uid : 'projete';
   const ulozProjete = () => ls.set(klicProjete(), JSON.stringify(projete));
   const normEvc = (x) => String(x || '').trim().toUpperCase().replace(/[\s\/]+/g, '');
@@ -1682,21 +1682,28 @@ if (typeof document !== 'undefined') (function () {
     $('tabBtnEditor').hidden = !jeEditor();
     if (!jeSpravce() && !$('tabSprava').hidden) prepniZalozku('projeti');
     if (!jeEditor() && !$('tabEditor').hidden) prepniZalozku('projeti');
-    $('vjrCard').hidden = !obeh || jeBezVjr();
+    vjrNaplnit();
   }
   const jeHlavni = () => !!(cloud.user && cloud.user.email === SPRAVCE_EMAIL);
-  const jeSpravce = () => jeHlavni() || (!!cloud.user && cloud.role === 'spravce');
-  const jeBlokovany = () => !!cloud.user && cloud.role === 'blokovany' && !jeHlavni();
+  const maRoli = (r) => !!cloud.user && cloud.roles.has(r);
+  const jeSpravce = () => jeHlavni() || maRoli('spravce');
+  const jeBlokovany = () => maRoli('blokovany') && !jeHlavni();
   const ROLE = { '': 'Uživatel', editor: 'Editor oběhů', spravce: 'Správce', bezvjr: 'BEZ VJŘ', blokovany: 'Zablokovaný' };
-  const jeBezVjr = () => !!cloud.user && cloud.role === 'bezvjr' && !jeHlavni();
-  const jeEditor = () => jeSpravce() || (!!cloud.user && cloud.role === 'editor');
+  // export VJŘ jen pro přihlášené bez role BEZ VJŘ
+  const jeBezVjr = () => !jeHlavni() && (!cloud.user || maRoli('bezvjr'));
+  const jeEditor = () => jeSpravce() || maRoli('editor');
+  // Firestore: pole role = hlavní role (kvůli pravidlům), role_vse = všechny role
+  const ROLE_PORADI = ['blokovany', 'spravce', 'editor', 'bezvjr'];
+  const roleZDokumentu = (x) => new Set(Array.isArray(x && x.role_vse) ? x.role_vse : (x && x.role ? [x.role] : []));
+  const hlavniRole = (set) => ROLE_PORADI.find((r) => set.has(r)) || '';
 
   async function nactiRoli() {
     try {
       const { F, db } = cloud.fb;
       const d = await F.getDoc(F.doc(db, 'role', cloud.user.uid));
-      cloud.role = d.exists() ? (d.data().role || '') : '';
-    } catch { cloud.role = ''; }
+      cloud.roles = roleZDokumentu(d.exists() ? d.data() : null);
+      cloud.role = hlavniRole(cloud.roles);
+    } catch { cloud.role = ''; cloud.roles = new Set(); }
     kresliUcet(); hledejProjeti();
   }
 
@@ -1728,7 +1735,7 @@ if (typeof document !== 'undefined') (function () {
 
   async function prihlaseniZmena(u) {
     cloud.user = u || null;
-    cloud.role = '';
+    cloud.role = ''; cloud.roles = new Set();
     if (!u) {
       vlastniObehy = []; vlozVlastniObehy();
       cloud.jmeno = ''; projete = nactiJson('projete', {});
@@ -2116,7 +2123,7 @@ if (typeof document !== 'undefined') (function () {
         F.getDocs(F.collection(db, 'role')).catch(() => ({ forEach() {} }))]);
       sprava = { uzivatele: {}, projeti: {}, role: {} };
       us.forEach((d) => { sprava.uzivatele[d.id] = d.data(); });
-      rs.forEach((d) => { sprava.role[d.id] = d.data().role || ''; });
+      rs.forEach((d) => { sprava.role[d.id] = roleZDokumentu(d.data()); });
       ps.forEach((d) => {
         const x = d.data();
         (sprava.projeti[x.uid] ||= {})[x.evc] = x;
@@ -2129,8 +2136,8 @@ if (typeof document !== 'undefined') (function () {
   const jeHlavniUid = (uid) => (sprava.uzivatele[uid]?.prezdivka || '') && prezdivkaNaEmail(sprava.uzivatele[uid].prezdivka) === SPRAVCE_EMAIL;
   function odznak(uid) {
     if (jeHlavniUid(uid)) return ' <span class="badge">hlavní správce</span>';
-    const r = sprava.role[uid];
-    return r ? ` <span class="badge${r === 'blokovany' ? ' bad' : ''}">${esc(ROLE[r] || r)}</span>` : '';
+    const rs = [...(sprava.role[uid] || [])].sort((a, b) => ROLE_PORADI.indexOf(a) - ROLE_PORADI.indexOf(b));
+    return rs.map((r) => ` <span class="badge${r === 'blokovany' ? ' bad' : ''}">${esc(ROLE[r] || r)}</span>`).join('');
   }
 
   function kresliSpravu() {
@@ -2152,7 +2159,7 @@ if (typeof document !== 'undefined') (function () {
     $('spravaDetailNazev').textContent = `${u.prezdivka || '?'} – ${pocetVozu(vozy.length)}`;
     const muzeRole = jeHlavni() && !jeHlavniUid(uid);
     $('spravaRoleBox').hidden = !muzeRole;
-    if (muzeRole) $('spravaRole').value = sprava.role[uid] || '';
+    if (muzeRole) $('spravaRole').querySelectorAll('input').forEach((i) => { i.checked = (sprava.role[uid] || new Set()).has(i.value); });
     $('dopravciList2').innerHTML = [...new Set([...Object.values(zname), ...Object.values(sprava.projeti).flatMap((m) => Object.values(m).map((x) => x.dopravce))].filter(Boolean))]
       .sort().map((d) => `<option value="${esc(d)}">`).join('');
     $('spravaSeznam').innerHTML = vozy.length ? vozy.map((x) => `<div class="prow">
@@ -2210,16 +2217,17 @@ if (typeof document !== 'undefined') (function () {
   async function spravaNastavRoli(uid, role) {
     if (!jeHlavni() || jeHlavniUid(uid)) return;
     const jm = sprava.uzivatele[uid]?.prezdivka || '?';
+    const set = new Set(role);
     try {
       const { F, db } = cloud.fb;
-      if (role) await F.setDoc(F.doc(db, 'role', uid), { role, prezdivka: jm, zmeneno: F.serverTimestamp() });
+      if (set.size) await F.setDoc(F.doc(db, 'role', uid), { role: hlavniRole(set), role_vse: [...set], prezdivka: jm, zmeneno: F.serverTimestamp() });
       else await F.deleteDoc(F.doc(db, 'role', uid));
-      if (role) sprava.role[uid] = role; else delete sprava.role[uid];
-      toast(`${jm}: ${ROLE[role]}`);
+      if (set.size) sprava.role[uid] = set; else delete sprava.role[uid];
+      toast(`${jm}: ${set.size ? [...set].map((r) => ROLE[r] || r).join(', ') : ROLE['']}`);
       kresliSpravu();
     } catch (e) {
       toast(`Nepodařilo se změnit práva (${e.code || e.message}). Máte ve Firebase nová pravidla?`);
-      $('spravaRole').value = sprava.role[uid] || '';
+      kresliSpravaDetail();
     }
   }
 
