@@ -405,7 +405,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.5';
+const APP_VERZE = '2026-11-27.6';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -829,6 +829,9 @@ async function vjrNactiKnihovny() {
       'N|normal': 'LiberationSansNarrow-Regular', 'N|bold': 'LiberationSansNarrow-Bold', 'T|normal': 'LiberationSerif-Regular' };
     for (const [k, b64] of Object.entries(vlastni)) if (mapa[k]) vjrFonty[mapa[k]] = b64;
   }
+  // chybí-li vlastní tučný řez k vlastnímu obyčejnému, ztuční se obyčejný (obrys), ať se nemíchají dvě různá písma
+  vjrFonty._umelyTucny = {};
+  for (const rod of ['A', 'N']) vjrFonty._umelyTucny[rod] = !!(vlastni && vlastni[rod + '|normal'] && !vlastni[rod + '|bold']);
 }
 
 // pořadí zastávek jedné linky: nejdelší spoj je kostra, ostatní (otočené do stejného směru) se do ní vplétají
@@ -963,8 +966,18 @@ function vjrPdf(o, spoje, opt = {}) {
   const S = VJR_STYL[tram ? 'tram' : 'bus'];
   const XL = 20.05, XP = 575.05, VNITR_DOLE = 770.9;
   const ted = new Date();
-  const f = (rod, size, styl = 'normal') => { doc.setFont(rod, styl); doc.setFontSize(size); };
-  const txt = (s, x, y, al) => doc.text(String(s), x, y, al ? { align: al } : undefined);
+  let obrys = 0;
+  const f = (rod, size, styl = 'normal') => {
+    obrys = 0;
+    if (styl === 'bold' && vjrFonty._umelyTucny && vjrFonty._umelyTucny[rod]) { styl = 'normal'; obrys = size * 0.05; }
+    doc.setFont(rod, styl); doc.setFontSize(size);
+  };
+  const txt = (s, x, y, al) => {
+    const o = al ? { align: al } : {};
+    if (obrys) { o.renderingMode = 'fillThenStroke'; doc.setLineWidth(obrys); doc.setDrawColor(0); }
+    doc.text(String(s), x, y, o);
+    if (obrys) doc.setTextRenderingMode ? doc.setTextRenderingMode('fill') : 0;
+  };
   const sirka = (s) => doc.getTextWidth(String(s));
   const cara = (x1, y1, x2, y2, w = 0.95) => { doc.setLineWidth(w); doc.line(x1, y1, x2, y2); };
   const dvojita = (y) => { cara(XL, y + 0.5, XP, y + 0.5); cara(XL, y + 2.45, XP, y + 2.45); };   // y = horní hrana
