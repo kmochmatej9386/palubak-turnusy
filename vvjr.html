@@ -404,7 +404,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.7';
+const APP_VERZE = '2026-11-27.8';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -830,7 +830,7 @@ async function vjrNactiKnihovny() {
   }
   // chybí-li vlastní tučný řez k vlastnímu obyčejnému, ztuční se obyčejný (obrys), ať se nemíchají dvě různá písma
   vjrFonty._umelyTucny = {};
-  for (const rod of ['A', 'N']) vjrFonty._umelyTucny[rod] = !!(vlastni && vlastni[rod + '|normal'] && !vlastni[rod + '|bold']);
+  for (const rod of ['N']) vjrFonty._umelyTucny[rod] = !!(vlastni && vlastni[rod + '|normal'] && !vlastni[rod + '|bold']);
 }
 
 // pořadí zastávek jedné linky: nejdelší spoj je kostra, ostatní (otočené do stejného směru) se do ní vplétají
