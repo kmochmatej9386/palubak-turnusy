@@ -227,7 +227,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
     <div class="tsub" id="vjrStav"></div>
     <div class="tsub" style="margin-top:6px"><button class="link" id="vjrPismaBtn">Nahrát fonty</button>
       <button class="link" id="vjrPismaSmazat" hidden>smazat nahraná</button> <span id="vjrPismaStav"></span></div>
-    <input type="file" id="vjrPismaSoubor" accept=".ttf,.TTF,.otf" multiple hidden>
+    <input type="file" id="vjrPismaSoubor" accept=".ttf,.TTF,.otf,.zip,.ZIP" multiple hidden>
   </div>
 
   <div class="card">
@@ -405,7 +405,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.13';
+const APP_VERZE = '2026-11-27.14';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -471,6 +471,17 @@ async function zipObsah(blob) {
   }
   out._blob = blob;
   return out;
+}
+
+// jeden soubor ze ZIPu jako ArrayBuffer
+async function zipSoubor(zip, jmeno) {
+  const z = zip[jmeno];
+  const lh = new DataView(await zip._blob.slice(z.lho, z.lho + 30).arrayBuffer());
+  const start = z.lho + 30 + lh.getUint16(26, true) + lh.getUint16(28, true);
+  let stream = zip._blob.slice(start, start + z.csize).stream();
+  if (z.metoda === 8) stream = stream.pipeThrough(new DecompressionStream('deflate-raw'));
+  else if (z.metoda !== 0) throw new Error(`${jmeno}: nepodporovaná komprese`);
+  return await new Response(stream).arrayBuffer();
 }
 
 async function radky(zip, jmeno, onRow, onProgress) {
@@ -2875,8 +2886,19 @@ if (typeof document !== 'undefined') (function () {
     e.target.value = '';
     const ulozene = (await idb.get('vjrVlastniPisma')) || {};
     const pouzite = [], nepouzite = [];
+    // ZIP rozbalit – použijí se všechna písma uvnitř
+    const polozky = [];
     for (const f of soubory) {
-      const buf = await f.arrayBuffer();
+      const hl = new Uint8Array(await f.slice(0, 4).arrayBuffer());
+      if (hl[0] === 0x50 && hl[1] === 0x4b) {
+        try {
+          const zip = await zipObsah(f);
+          for (const jm of Object.keys(zip)) if (/\.(ttf|otf)$/i.test(jm)) polozky.push({ name: jm, buf: await zipSoubor(zip, jm) });
+        } catch { nepouzite.push(f.name); }
+      } else polozky.push({ name: f.name, buf: await f.arrayBuffer() });
+    }
+    for (const f of polozky) {
+      const buf = f.buf;
       let id = null;
       try { id = vjrRozpoznejPismo(buf); } catch {}
       const k = id && { 'A|normal': 1, 'A|bold': 1, 'A|bolditalic': 1, 'N|normal': 1, 'N|bold': 1, 'T|normal': 1 }[id.klic] ? id.klic : null;
