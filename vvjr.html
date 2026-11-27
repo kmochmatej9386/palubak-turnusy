@@ -225,6 +225,9 @@ button.primary:disabled { opacity: .4; cursor: default; }
     </div>
     <button class="primary" id="vjrBtn" style="width:100%;margin-top:8px">Stáhnout VJŘ (PDF)</button>
     <div class="tsub" id="vjrStav"></div>
+    <div class="tsub" style="margin-top:6px"><button class="link" id="vjrPismaBtn">Nahrát fonty</button>
+      <button class="link" id="vjrPismaSmazat" hidden>smazat nahraná</button> <span id="vjrPismaStav"></span></div>
+    <input type="file" id="vjrPismaSoubor" accept=".ttf,.TTF,.otf" multiple hidden>
   </div>
 
   <div class="card">
@@ -402,7 +405,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.4';
+const APP_VERZE = '2026-11-27.5';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -818,6 +821,13 @@ async function vjrNactiKnihovny() {
     const f = {};
     await Promise.all(Object.values(VJR_LIB.fonty).flat().map(async (jm) => { f[jm] = await b64(jm); }));
     vjrFonty = f;
+  }
+  // vlastní písma nahraná uživatelem (zůstávají jen v tomto zařízení)
+  const vlastni = await idb.get('vjrVlastniPisma');
+  if (vlastni) {
+    const mapa = { 'A|normal': 'LiberationSans-Regular', 'A|bold': 'LiberationSans-Bold', 'A|bolditalic': 'LiberationSans-BoldItalic',
+      'N|normal': 'LiberationSansNarrow-Regular', 'N|bold': 'LiberationSansNarrow-Bold', 'T|normal': 'LiberationSerif-Regular' };
+    for (const [k, b64] of Object.entries(vlastni)) if (mapa[k]) vjrFonty[mapa[k]] = b64;
   }
 }
 
@@ -1472,6 +1482,10 @@ if (typeof document !== 'undefined') (function () {
     });
     $('kopirovat').addEventListener('click', kopiruj);
     $('vjrBtn').addEventListener('click', vjrExport);
+    $('vjrPismaBtn').addEventListener('click', () => $('vjrPismaSoubor').click());
+    $('vjrPismaSoubor').addEventListener('change', vjrNahratPisma);
+    $('vjrPismaSmazat').addEventListener('click', async () => { await idb.set('vjrVlastniPisma', null); vjrFonty = null; vjrPismaInfo(); });
+    vjrPismaInfo();
     $('palExport').addEventListener('click', exportPalubak);
     $('gtfsSoubor').addEventListener('change', async (e) => {
       const f = e.target.files[0]; if (!f) return;
@@ -2715,6 +2729,64 @@ if (typeof document !== 'undefined') (function () {
     if (!$('vjrOd').value) $('vjrOd').value = vjrPlatiOd(obeh);
     $('vjrVse').checked = !!ulozene.vsechny;
     $('vjrStav').textContent = '';
+  }
+  // co je to za písmo: rodina z tabulky "name", tloušťka a kurzíva z "OS/2"
+  function vjrRozpoznejPismo(buf) {
+    const dv = new DataView(buf);
+    const n = dv.getUint16(4);
+    const tab = {};
+    for (let i = 0; i < n; i++) {
+      const o = 12 + i * 16;
+      tab[String.fromCharCode(dv.getUint8(o), dv.getUint8(o + 1), dv.getUint8(o + 2), dv.getUint8(o + 3))] = dv.getUint32(o + 8);
+    }
+    if (tab.name == null) return null;
+    const nb = tab.name, cnt = dv.getUint16(nb + 2), str = nb + dv.getUint16(nb + 4);
+    const jm = {};
+    for (let i = 0; i < cnt; i++) {
+      const r = nb + 6 + i * 12, plat = dv.getUint16(r), id = dv.getUint16(r + 6), len = dv.getUint16(r + 8), off = dv.getUint16(r + 10);
+      if (![1, 2, 4].includes(id) || jm[id]) continue;
+      let t = '';
+      if (plat === 3 || plat === 0) for (let k = 0; k < len; k += 2) t += String.fromCharCode(dv.getUint16(str + off + k));
+      else for (let k = 0; k < len; k++) t += String.fromCharCode(dv.getUint8(str + off + k));
+      jm[id] = t;
+    }
+    let vaha = 400, kurz = false;
+    if (tab['OS/2'] != null) { vaha = dv.getUint16(tab['OS/2'] + 4); kurz = !!(dv.getUint16(tab['OS/2'] + 62) & 1); }
+    const cele = `${jm[1] || ''} ${jm[2] || ''} ${jm[4] || ''}`;
+    if (/bold/i.test(cele)) vaha = Math.max(vaha, 700);
+    if (/italic|oblique/i.test(jm[2] || '')) kurz = true;
+    // jen základní rodiny (ne Arial Th, Arial Black…); "GEO" je jen jiné kódování, latinku má celou
+    const rodina = (jm[1] || '').replace(/\b(bold|italic|regular|geo|mt)\b/gi, '').replace(/[\s_-]+/g, ' ').trim().toLowerCase();
+    const rod = rodina === 'arial narrow' ? 'N' : rodina === 'times new roman' ? 'T' : rodina === 'arial' ? 'A' : null;
+    if (!rod || vaha < 400) return null;            // tenké řezy (Arial Th apod.) ne
+    const styl = vaha >= 600 ? (kurz ? 'bolditalic' : 'bold') : (kurz ? 'italic' : 'normal');
+    return { klic: rod + '|' + styl, nazev: (jm[4] || jm[1] || '').trim() };
+  }
+  async function vjrNahratPisma(e) {
+    const soubory = [...e.target.files];
+    e.target.value = '';
+    const ulozene = (await idb.get('vjrVlastniPisma')) || {};
+    const pouzite = [], nepouzite = [];
+    for (const f of soubory) {
+      const buf = await f.arrayBuffer();
+      let id = null;
+      try { id = vjrRozpoznejPismo(buf); } catch {}
+      const k = id && { 'A|normal': 1, 'A|bold': 1, 'A|bolditalic': 1, 'N|normal': 1, 'N|bold': 1, 'T|normal': 1 }[id.klic] ? id.klic : null;
+      if (!k) { nepouzite.push(f.name); continue; }
+      const u = new Uint8Array(buf);
+      let t = ''; for (let i = 0; i < u.length; i += 0x8000) t += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+      ulozene[k] = btoa(t);
+      pouzite.push(id.nazev || f.name);
+    }
+    await idb.set('vjrVlastniPisma', ulozene);
+    vjrFonty = null;
+    vjrPismaInfo((pouzite.length ? 'Použito: ' + pouzite.join(', ') + '. ' : '') + (nepouzite.length ? 'Nepoužito: ' + nepouzite.join(', ') + '.' : ''));
+  }
+  async function vjrPismaInfo(extra = '') {
+    const u = (await idb.get('vjrVlastniPisma')) || {};
+    const n = Object.keys(u).length;
+    $('vjrPismaSmazat').hidden = !n;
+    $('vjrPismaStav').textContent = (n ? `Vlastní písma: ${n}. ` : '') + extra;
   }
   async function vjrExport() {
     if (!obeh || !R) return;
