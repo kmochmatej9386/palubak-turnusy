@@ -405,7 +405,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.11';
+const APP_VERZE = '2026-11-27.12';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -983,18 +983,14 @@ function vjrPdf(o, spoje, opt = {}) {
   const dvojita = (y) => { cara(XL, y + 0.5, XP, y + 0.5); cara(XL, y + 2.45, XP, y + 2.45); };   // y = horní hrana
   const R = vjrRozvrh(o, spoje, opt.vsechny);
 
-  // šipka směru (vektorově – originál má vlastní font "Timetable"): ↓ tenká, ↑ tučná
+  // šipka směru – tvar podle písma Timetable (CHAPS), které originál používá (znaky ":" = ↑, ";" = ↓); souřadnice v jednotkách em/2048
+  const SIP_NAHORU = [[909, 999], [909, 739], [600, 999], [600, -121], [399, -121], [399, 999], [90, 739], [90, 999], [500, 1350]];
+  const SIP_DOLU = [[500, -121], [90, 219], [90, 489], [399, 219], [399, 1350], [600, 1350], [600, 219], [909, 489], [909, 219]];
   function sipka(x, yb, dolu, pt) {
-    const k = pt / 9, w = 4.4 * k, cx = x + w / 2, h = 6.6 * k, hw = 1.7 * k, hh = 2.6 * k;
-    const top = yb - h;
+    const k = pt / 2048, b = (dolu ? SIP_DOLU : SIP_NAHORU).map(([ux, uy]) => [x + ux * k, yb - uy * k]);
+    const d = b.slice(1).map((q, i) => [q[0] - b[i][0], q[1] - b[i][1]]);
     doc.setFillColor(0);
-    if (dolu) {
-      cara(cx, top, cx, yb - hh + 0.3, 0.75 * k);
-      doc.triangle(cx - hw, yb - hh, cx + hw, yb - hh, cx, yb, 'F');
-    } else {
-      cara(cx, yb, cx, top + hh - 0.3, 1.15 * k);
-      doc.triangle(cx - hw, top + hh, cx + hw, top + hh, cx, top, 'F');
-    }
+    doc.lines(d, b[0][0], b[0][1], [1, 1], 'F', true);
   }
 
   // ---- bloky: sloupce po S.sl spojích, řádky = zastávky všech linek, které v bloku jedou ----
