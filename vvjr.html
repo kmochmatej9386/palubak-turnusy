@@ -404,7 +404,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.9';
+const APP_VERZE = '2026-11-27.10';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -2801,7 +2801,7 @@ if (typeof document !== 'undefined') (function () {
     const jm = (x) => String(x).toLowerCase().replace(/\s+/g, ' ').trim();
     for (let i = 1; i < sp.length; i++) {
       const a = R.spoje[sp[i - 1]], b = R.spoje[sp[i]];
-      if (jm(a.do) !== jm(b.z)) out.push({ nadpis: 'Přejezd', tid: sp[i], text: `${a.do} (${c(a.prij)}) - ${b.z} (${c(b.odj)})` });
+      if (jm(a.do) !== jm(b.z)) out.push({ nadpis: 'Přejezd', tid: sp[i], text: `${a.do} ${c(a.prij)} - ${b.z} ${c(b.odj)}` });
     }
     out.push({ nadpis: 'Zatažení', tid: sp[sp.length - 1], text: `${K.do} ${c(K.prij)} - ${misto} ${c(K.prij + 10)}` });
     return out;
