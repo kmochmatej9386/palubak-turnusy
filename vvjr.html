@@ -366,6 +366,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
           <option value="">Uživatel – zapisuje jen svoje projetí</option>
           <option value="editor">Editor oběhů – může vytvářet a upravovat oběhy</option>
           <option value="spravce">Správce – projetí všech + editor oběhů</option>
+          <option value="bezvjr">BEZ VJŘ – jako uživatel, ale nevidí export VJŘ (PDF)</option>
           <option value="blokovany">Zablokovaný – nemůže nic zapisovat</option>
         </select>
       </div>
@@ -404,7 +405,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.10';
+const APP_VERZE = '2026-11-27.11';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -1685,11 +1686,13 @@ if (typeof document !== 'undefined') (function () {
     $('tabBtnEditor').hidden = !jeEditor();
     if (!jeSpravce() && !$('tabSprava').hidden) prepniZalozku('projeti');
     if (!jeEditor() && !$('tabEditor').hidden) prepniZalozku('projeti');
+    $('vjrCard').hidden = !obeh || jeBezVjr();
   }
   const jeHlavni = () => !!(cloud.user && cloud.user.email === SPRAVCE_EMAIL);
   const jeSpravce = () => jeHlavni() || (!!cloud.user && cloud.role === 'spravce');
   const jeBlokovany = () => !!cloud.user && cloud.role === 'blokovany' && !jeHlavni();
-  const ROLE = { '': 'Uživatel', editor: 'Editor oběhů', spravce: 'Správce', blokovany: 'Zablokovaný' };
+  const ROLE = { '': 'Uživatel', editor: 'Editor oběhů', spravce: 'Správce', bezvjr: 'BEZ VJŘ', blokovany: 'Zablokovaný' };
+  const jeBezVjr = () => !!cloud.user && cloud.role === 'bezvjr' && !jeHlavni();
   const jeEditor = () => jeSpravce() || (!!cloud.user && cloud.role === 'editor');
 
   async function nactiRoli() {
@@ -2812,8 +2815,8 @@ if (typeof document !== 'undefined') (function () {
     $('vjrTrasy').innerHTML = t.map((x) => `<b>${esc(x.nadpis)}:</b> ${esc(x.text)}`).join('<br>');
   }
   async function vjrNaplnit() {
-    $('vjrCard').hidden = !obeh;
-    if (!obeh) return;
+    $('vjrCard').hidden = !obeh || jeBezVjr();
+    if (!obeh || jeBezVjr()) return;
     const o = obeh;
     let ulozene = {};
     try { ulozene = JSON.parse(ls.get(vjrKlic(o)) || ls.get('vjr|' + o.o) || '{}'); } catch {}
@@ -2890,7 +2893,7 @@ if (typeof document !== 'undefined') (function () {
     $('vjrPismaStav').textContent = (n ? `Vlastní písma: ${n}. ` : '') + extra;
   }
   async function vjrExport() {
-    if (!obeh || !R) return;
+    if (!obeh || !R || jeBezVjr()) return;
     const o = obeh;
     const opt = { vsechny: $('vjrVse').checked };
     for (const [id, k] of Object.entries(VJR_POLE)) opt[k] = $(id).value.trim();
