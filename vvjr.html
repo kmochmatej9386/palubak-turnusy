@@ -404,7 +404,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.8';
+const APP_VERZE = '2026-11-27.9';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -944,11 +944,11 @@ function vjrTypDne(m) {
 }
 
 
-/* Rozměry převzaté z originálních VJŘ DPP (A4, body). Autobusy: 10 sloupců, Arial Narrow 9/11;
+/* Rozměry převzaté z originálních VJŘ DPP (A4, body). Autobusy: 8 sloupců, Arial 10/12;
    tramvaje (linka do 99): 6 širokých sloupců, Arial 12/14. */
 const VJR_STYL = {
-  bus: { sl: 10, x0: 116.9, sw: 45.9, rv: 14.52, pad: 1, zast: 10, zastX: 21, base: 10.3,
-    cas: ['N', 9, 27.3], tucne: ['N', 11, 29.8], sip: [2.4, 9], stitek: ['N', 9] },
+  bus: { sl: 8, x0: 121.9, sw: 56.65, rv: 14.52, pad: 1, zast: 11, zastX: 22.2, base: 10.5,
+    cas: ['A', 10, 35.1], tucne: ['A', 12, 38.4], sip: [2.7, 10], stitek: ['A', 10] },
   tram: { sl: 6, x0: 150.24, sw: 70.84, rv: 15.25, pad: 2, zast: 11, zastX: 22.2, base: 12,
     cas: ['A', 12, 43], tucne: ['A', 14, 45.3], sip: [3.2, 12], stitek: ['A', 12] },
 };
@@ -1148,7 +1148,7 @@ function vjrPdf(o, spoje, opt = {}) {
         if (R.stitky[t] && s.prvniRadek >= 0) {
           const g = prvniZast + m[s.prvniRadek] + (s.smer === 1 ? -1 : 1);
           doc.setFillColor(192, 192, 192); doc.rect(x + 0.6, rTop(g) + 1.3, S.sw - 1.2, S.rv - 3, 'F');
-          f(S.stitek[0], S.stitek[1], 'bold'); txt(R.stitky[t], x + S.sw / 2, rTop(g) + (tram ? 11.6 : 10.1), 'center');
+          f(S.stitek[0], S.stitek[1], 'bold'); txt(R.stitky[t], x + S.sw / 2, rTop(g) + (tram ? 11.6 : 10.4), 'center');
         }
       });
       y = top + b.v - 1.5;
