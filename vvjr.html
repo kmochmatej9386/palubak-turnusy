@@ -75,6 +75,7 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); m
 .route td.t { font-variant-numeric: tabular-nums; white-space: nowrap; width: 1%; color: var(--muted); }
 .route td.t b { color: var(--text); font-weight: 600; }
 .route tr:first-child td:last-child, .route tr:last-child td:last-child { font-weight: 600; }
+.vjrf { display: grid; gap: 6px; } .vjrf .pole { box-sizing: border-box; margin: 0; font-family: inherit; }
 pre { font: 13px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; margin: 0; max-height: 340px; overflow: auto; }
 .empty { color: var(--muted); padding: 6px 0; }
 .err { color: var(--accent); }
@@ -101,7 +102,7 @@ button.link { background: none; border: 0; padding: 0; font: inherit; font-size:
 .tabs button { flex: 1; border: 0; background: none; color: var(--muted); font: inherit; font-weight: 600; padding: 9px 6px; border-radius: 9px; cursor: pointer; }
 .tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-text); }
 select { width: 100%; font-size: 16px; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); margin-bottom: 6px; }
-input.pole { width: 100%; font-size: 16px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
+input.pole, textarea.pole { width: 100%; font-size: 16px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
   background: var(--bg); color: var(--text); margin-bottom: 8px; }
 .ostatni { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 14px; }
 .prow { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
@@ -207,6 +208,23 @@ button.primary:disabled { opacity: .4; cursor: default; }
   <div class="card" id="nahledCard" hidden>
     <div class="head"><h2>Náhled</h2></div>
     <pre id="nahled"></pre>
+  </div>
+
+  <div class="card" id="vjrCard" hidden>
+    <div class="head"><h2>Export VJŘ (PDF)</h2></div>
+    <p class="tsub" style="margin:0 0 8px">Vozový jízdní řád vybraného oběhu ve formátu DPP. Údaje, které nejsou v jízdních řádech, doplňte (zapamatují se pro tento oběh).</p>
+    <div class="vjrf">
+      <input class="pole" id="vjrProv" placeholder="Provozovna (např. Hostivař)">
+      <input class="pole" id="vjrTyp" placeholder="Typ vozu (např. SdN /G/)">
+      <input class="pole" id="vjrGraf" placeholder="Čís. grafikonu (např. T8511)">
+      <input class="pole" id="vjrOd" placeholder="Platí od">
+      <textarea class="pole" id="vjrVyj" rows="2" placeholder="Výjezd (např. Depo HO 4:50 - Vrata HO 4:53 - Palmovka 5:05)"></textarea>
+      <textarea class="pole" id="vjrZat" rows="2" placeholder="Zatažení"></textarea>
+      <textarea class="pole" id="vjrPozn" rows="2" placeholder="Poznámky"></textarea>
+      <label><input type="checkbox" id="vjrVse"> Všechny zastávky (jinak jen časové body jako v DPP VJŘ)</label>
+    </div>
+    <button class="primary" id="vjrBtn" style="width:100%;margin-top:8px">Stáhnout VJŘ (PDF)</button>
+    <div class="tsub" id="vjrStav"></div>
   </div>
 
   <div class="card">
@@ -384,7 +402,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-25.2';
+const APP_VERZE = '2026-11-27.1';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -767,6 +785,297 @@ function textVVJR(o, spoje, vybrane, live, chciDopravce, chciVuz, html = false) 
   return html ? radky.join('<br>\n') : radky.join('\n');
 }
 
+/* ====================== generátor VJŘ (vozový jízdní řád) do PDF ======================
+   Rozložení podle tiskopisu DPP: hlavička (Linka, Pořadí, Provozovna, typ dne, List č.),
+   Typ vozu / Čís. graf. / Platí od, box Výjezd, bloky tabulek (řádky = zastávky linky,
+   sloupce = spoje oběhu za sebou, ↓ jede shora dolů, ↑ zdola nahoru, tučně čas výchozí
+   zastávky, šedý štítek linka/pořadí při nástupu na linku), box Zatažení a Poznámky. */
+const VJR_LIB = {
+  jspdf: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+  font: 'https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37.3/ttf/DejaVuSansCondensed.ttf',
+  fontB: 'https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37.3/ttf/DejaVuSansCondensed-Bold.ttf',
+};
+let vjrFonty = null;
+async function vjrNactiKnihovny() {
+  if (!window.jspdf) {
+    await new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = VJR_LIB.jspdf; s.onload = res; s.onerror = () => rej(new Error('jsPDF se nepodařilo stáhnout'));
+      document.head.appendChild(s);
+    });
+  }
+  if (!vjrFonty) {
+    const b64 = async (url) => {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('Písmo se nepodařilo stáhnout');
+      const u = new Uint8Array(await r.arrayBuffer());
+      let s = '';
+      for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+      return btoa(s);
+    };
+    const [n, b] = await Promise.all([b64(VJR_LIB.font), b64(VJR_LIB.fontB)]);
+    vjrFonty = { n, b };
+  }
+}
+
+// pořadí zastávek jedné linky: nejdelší spoj je kostra, ostatní (otočené do stejného směru) se do ní vplétají
+function vjrKostra(trasy) {
+  const klice = (jmena) => { const c = {}; return jmena.map((j) => { c[j] = (c[j] || 0) + 1; return c[j] > 1 ? j + '\u0000' + c[j] : j; }); };
+  const serazene = trasy.map((t, i) => ({ i, jm: t })).sort((a, b) => b.jm.length - a.jm.length);
+  const seznam = klice(serazene[0].jm);
+  const smer = new Array(trasy.length);
+  smer[serazene[0].i] = 1;
+  for (const { i, jm } of serazene.slice(1)) {
+    const vpred = klice(jm), vzad = klice([...jm].reverse());
+    const skore = (k) => {    // kolik společných zastávek jde ve stejném pořadí jako kostra
+      let posl = -1, n = 0;
+      for (const x of k) { const p = seznam.indexOf(x, posl + 1); if (p >= 0) { posl = p; n++; } }
+      return n;
+    };
+    let sv = skore(vpred), sz = skore(vzad);
+    if (sv === sz && sv <= 1) {   // jedna společná zastávka (navazující úsek): odhad podle konců
+      const prvniJeKonec = seznam.indexOf(vpred[0]) === seznam.length - 1 || seznam.indexOf(vpred[vpred.length - 1]) === 0;
+      sv = prvniJeKonec ? 1 : 0; sz = prvniJeKonec ? 0 : 1;
+      if (!prvniJeKonec && seznam.indexOf(vpred[0]) !== 0 && seznam.indexOf(vpred[vpred.length - 1]) !== seznam.length - 1) { sv = 1; sz = 0; }
+    }
+    const k = sv >= sz ? vpred : vzad;
+    smer[i] = sv >= sz ? 1 : -1;
+    let posl = -1;
+    for (const x of k) {
+      const p = seznam.indexOf(x, posl + 1);
+      if (p >= 0) posl = p; else { seznam.splice(posl + 1, 0, x); posl++; }
+    }
+  }
+  return { seznam, smer, klice };
+}
+
+function vjrRozvrh(o, spoje, vsechny) {
+  const tids = o.s.filter((t) => spoje[t]).slice().sort((a, b) => spoje[a].odj - spoje[b].odj);
+  const linky = [];
+  for (const t of tids) if (!linky.includes(spoje[t].linka)) linky.push(spoje[t].linka);
+  linky.sort((a, b) => (b === String(o.kmen)) - (a === String(o.kmen)));
+  const sady = {};
+  for (const l of linky) {
+    const lt = tids.filter((t) => spoje[t].linka === l);
+    const { seznam, smer, klice } = vjrKostra(lt.map((t) => spoje[t].t.map((x) => x[0])));
+    sady[l] = { linka: l, zastavky: seznam.map((k) => k.split('\u0000')[0]), sloupce: {} };
+    lt.forEach((t, i) => {
+      const s = spoje[t];
+      const st = smer[i] === 1 ? s.t : [...s.t].reverse();
+      const k = klice(st.map((x) => x[0]));
+      const casy = new Array(seznam.length).fill(null);
+      let min = Infinity, max = -1, prvniRadek = -1;
+      k.forEach((x, j) => {
+        const r = seznam.indexOf(x);
+        if (r < 0) return;
+        const zast = st[j];
+        const jeKonec = smer[i] === 1 ? j === st.length - 1 : j === 0;
+        const jeZacatek = smer[i] === 1 ? j === 0 : j === st.length - 1;
+        casy[r] = jeKonec ? (zast[1] ?? zast[2]) : (zast[2] ?? zast[1]);
+        if (jeZacatek) prvniRadek = r;
+        min = Math.min(min, r); max = Math.max(max, r);
+      });
+      sady[l].sloupce[t] = { casy, smer: smer[i], min, max, prvniRadek };
+    });
+    if (!vsechny) vjrProrid(sady[l]);
+  }
+  // štítek linka/pořadí: na prvním spoji a při každé změně linky
+  const stitky = {};
+  let pred = null;
+  for (const t of tids) { if (spoje[t].linka !== pred) stitky[t] = `${spoje[t].linka}/${o.poradi}`; pred = spoje[t].linka; }
+  return { tids, linky, sady, stitky };
+}
+
+
+// VJŘ neuvádí všechny zastávky, jen časové body: konečné, místa kde spoj začíná/končí
+// a zhruba každé 4 minuty jízdy (podle nejdelšího spoje linky)
+function vjrProrid(sada, MEZ = 4) {
+  const n = sada.zastavky.length, nech = new Array(n).fill(false);
+  const sl = Object.values(sada.sloupce);
+  for (const s of sl) { if (s.min >= 0 && s.min < n) nech[s.min] = true; if (s.max >= 0) nech[s.max] = true; }
+  const zaklad = sl.slice().sort((a, b) => b.casy.filter((x) => x != null).length - a.casy.filter((x) => x != null).length)[0];
+  if (zaklad) {
+    let t0 = null;
+    for (let r = 0; r < n; r++) {
+      const c = zaklad.casy[r];
+      if (c == null) continue;
+      // nejbližší povinný bod dál po trase – ať nevzniknou dva body těsně u sebe
+      let dalsiPovinny = null;
+      for (let q = r + 1; q < n; q++) if (nech[q] && zaklad.casy[q] != null) { dalsiPovinny = zaklad.casy[q]; break; }
+      if (nech[r] || t0 == null) { nech[r] = true; t0 = c; continue; }
+      if (Math.abs(c - t0) >= MEZ && (dalsiPovinny == null || Math.abs(dalsiPovinny - c) >= 2)) { nech[r] = true; t0 = c; }
+    }
+  }
+  const mapa = [];
+  nech.forEach((b, r) => { if (b) mapa.push(r); });
+  sada.zastavky = mapa.map((r) => sada.zastavky[r]);
+  for (const s of sl) {
+    const nove = mapa.map((r) => s.casy[r]);
+    const prvni = mapa.indexOf(s.prvniRadek);
+    const obsaz = nove.map((c, i) => c != null ? i : -1).filter((i) => i >= 0);
+    s.casy = nove; s.prvniRadek = prvni;
+    s.min = obsaz.length ? obsaz[0] : -1; s.max = obsaz.length ? obsaz[obsaz.length - 1] : -1;
+  }
+}
+
+const vjrCas = (m) => m == null ? '' : `${Math.floor(m / 60) % 24}:${String(m % 60).padStart(2, '0')}`;
+const vjrDatum = (d) => `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
+const vjrTisk = (d) => `${vjrDatum(d)} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+function vjrTypDne(m) {
+  if (!m) return '';
+  const k = m.map((x) => x ? 1 : 0).join('');
+  return { '1111100': 'Pracovní den', '0000011': 'Sobota + Neděle', '0000010': 'Sobota', '0000001': 'Neděle',
+    '1111111': 'Denně', '1111000': 'Po – Čt', '0000100': 'Pátek' }[k] || popisDnu(m);
+}
+
+/* opt: { firma, provozovna, typVozu, cisGraf, platiOd, typDne, vyjezd, zatazeni, poznamky, sloupcu } */
+function vjrPdf(o, spoje, opt = {}) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  doc.addFileToVFS('vjr.ttf', vjrFonty.n); doc.addFont('vjr.ttf', 'vjr', 'normal');
+  doc.addFileToVFS('vjrb.ttf', vjrFonty.b); doc.addFont('vjrb.ttf', 'vjr', 'bold');
+  const W = 595.28, H = 841.89, L = 24, P = W - 24, SIRKA = P - L;
+  const NAZEV = 104, SL = opt.sloupcu || 8, SW = (SIRKA - NAZEV) / SL;
+  const RV = 12, SV = 10;   // výška řádku zastávky / řádku se štítky
+  const ted = new Date();
+  const f = (size, bold) => { doc.setFont('vjr', bold ? 'bold' : 'normal'); doc.setFontSize(size); };
+  const txt = (s, x, y, o2) => doc.text(String(s), x, y, o2);
+  const R = vjrRozvrh(o, spoje, opt.vsechny);
+
+  // ---- bloky po SL sloupcích ----
+  const bloky = [];
+  for (let i = 0; i < R.tids.length; i += SL) {
+    const sl = R.tids.slice(i, i + SL);
+    const linky = R.linky.filter((l) => sl.some((t) => spoje[t].linka === l));
+    const v = linky.reduce((a, l) => a + SV + R.sady[l].zastavky.length * RV, SV) + 6;
+    bloky.push({ sl, linky, v });
+  }
+
+  // ---- rozdělení na listy ----
+  const HLAV = 84;                // konec hlavičky (y)
+  const PATA = H - 30;            // nad patičkou "Vytištěno"
+  const vyjezdV = (s) => Math.max(44, 12 + zalomit(s).length * 11);
+  function zalomit(s) {
+    f(8);
+    const out = [];
+    for (const odst of String(s || '').split('\n')) out.push(...doc.splitTextToSize(odst, SIRKA - 60));
+    return out.length ? out : [''];
+  }
+  const listy = [[]];
+  let y = HLAV + vyjezdV(opt.vyjezd);
+  for (const b of bloky) {
+    if (y + b.v > PATA - 10 && listy[listy.length - 1].length) { listy.push([]); y = HLAV; }
+    listy[listy.length - 1].push(b); y += b.v;
+  }
+  const konecV = vyjezdV(opt.zatazeni) + 70;     // Zatažení + aspoň kus Poznámek
+  if (y + konecV > PATA) { listy.push([]); }
+
+  const firma = opt.firma || 'Dopravní podnik hlavního města Prahy, akciová společnost';
+  listy.forEach((bl, li) => {
+    if (li) doc.addPage();
+    doc.setDrawColor(0); doc.setTextColor(0);
+    f(7.5); txt(vjrTisk(ted), W / 2, 16, { align: 'center' });
+    // hlavička
+    doc.setLineWidth(0.8); doc.rect(L, 22, SIRKA, HLAV - 22);
+    doc.setLineWidth(0.5);
+    f(7.5, true); txt(firma, W / 2, 31, { align: 'center' });
+    doc.line(L, 34, P, 34); doc.line(L, 60, P, 60); doc.line(L, 72, P, 72);
+    doc.line(P - 44, 34, P - 44, 60);
+    f(8.5); txt('Linka:', L + 4, 51);
+    f(17, true); txt(String(o.kmen), L + 31, 52);
+    f(8.5); txt('Pořadí:', L + 82, 51);
+    f(17, true); txt(String(o.poradi), L + 150, 52, { align: 'right' });
+    f(8.5); txt('Provozovna:', L + 160, 51);
+    f(12, true); txt(opt.provozovna || '', L + 210, 52);
+    f(12, true); txt(opt.typDne || vjrTypDne(o.maska), P - 50, 51, { align: 'right' });
+    f(7.5, true); txt('List', P - 22, 43, { align: 'center' }); txt(`č. ${li + 1}/${listy.length}`, P - 22, 54, { align: 'center' });
+    f(7, true);
+    txt('Typ vozu: ' + (opt.typVozu || ''), L + 4, 69);
+    txt('Čís.graf.: ' + (opt.cisGraf || ''), L + 270, 69);
+    txt('Platí od: ' + (opt.platiOd || ''), P - 4, 69, { align: 'right' });
+    let y = HLAV;
+    const box = (nadpis, text) => {
+      const radky = zalomit(text), v = vyjezdV(text);
+      doc.setLineWidth(0.8); doc.rect(L, y, SIRKA, v);
+      if (text) {
+        f(8, true); txt(nadpis + ':', L + 3, y + 11);
+        const w = doc.getTextWidth(nadpis + ': ');
+        f(8); radky.forEach((r, i) => txt(r, L + 3 + (i ? 22 : w), y + 11 + i * 11));
+      }
+      y += v;
+    };
+    if (li === 0) box('Výjezd', opt.vyjezd);
+
+    for (const b of bl) {
+      const x0 = L + NAZEV;
+      const top = y;
+      y += 4;
+      // které sloupce mají štítek nahoře / dole u sady linky
+      b.linky.forEach((l, si) => {
+        const sada = R.sady[l];
+        // řádek štítků nad sadou
+        const stitekRadek = (yy, filtr) => {
+          b.sl.forEach((t, c) => {
+            if (spoje[t].linka !== l || !R.stitky[t]) return;
+            if (!filtr(sada.sloupce[t])) return;
+            doc.setFillColor(200, 200, 200); doc.rect(x0 + c * SW + 2, yy - 7.6, SW - 8, 9.2, 'F');
+            f(6.5, true); txt(R.stitky[t], x0 + c * SW + 2 + (SW - 8) / 2, yy - 0.5, { align: 'center' });
+          });
+        };
+        y += SV;
+        stitekRadek(y - 1, (s) => s.smer === 1);
+        const y1 = y;
+        sada.zastavky.forEach((z, r) => {
+          const yr = y + RV - 2.8;
+          let fs = 8.3; f(fs);
+          while (doc.getTextWidth(z) > NAZEV - 4 && fs > 5.4) { fs -= 0.3; f(fs); }
+          txt(z, L + 2, yr);
+          b.sl.forEach((t, c) => {
+            const s = sada.sloupce[t];
+            if (!s) return;
+            const cas = s.casy[r];
+            const x = x0 + c * SW;
+            if (cas == null) {
+              if (r > s.min && r < s.max) { f(7.5); txt('--', x + 12, yr); }
+              return;
+            }
+            const tucne = r === s.prvniRadek;
+            f(7, true); txt(s.smer === 1 ? '↓' : '↑', x + 2, yr);
+            f(tucne ? 11 : 8, tucne); txt(vjrCas(cas), x + 9, yr + (tucne ? 0.5 : 0));
+          });
+          y += RV;
+          if (r % 2 === 1 && r < sada.zastavky.length - 1) { doc.setLineWidth(0.5); doc.line(L, y, P, y); }
+        });
+        // štítek pod sadou (spoj začíná dole – jede nahoru)
+        if (si === b.linky.length - 1) { y += SV; stitekRadek(y - 1, (s) => s.smer === -1); }
+        else {
+          // u další sady by se štítek ↑ spoje míchal se štítkem ↓ – dát ho do mezery pod sadu
+          const yy = y + SV;
+          b.sl.forEach((t, c) => {
+            if (spoje[t].linka !== l || !R.stitky[t] || sada.sloupce[t].smer !== -1) return;
+            doc.setFillColor(200, 200, 200); doc.rect(x0 + c * SW + 2, yy - 7.6, SW - 8, 9.2, 'F');
+            f(6.5, true); txt(R.stitky[t], x0 + c * SW + 2 + (SW - 8) / 2, yy - 0.5, { align: 'center' });
+          });
+        }
+        void y1;
+      });
+      y = top + b.v;
+      doc.setLineWidth(0.8); doc.line(L, y, P, y);
+    }
+    if (li === listy.length - 1) {
+      y += 6;
+      if (opt.zatazeni) box('Zatažení', opt.zatazeni);
+      // Poznámky do konce listu
+      const v = PATA - y;
+      doc.setLineWidth(0.8); doc.rect(L, y, SIRKA, v);
+      f(8.5, true); txt('Poznámky:', L + 3, y + 11);
+      if (opt.poznamky) { f(8); zalomit(opt.poznamky).forEach((r, i) => txt(r, L + 3, y + 24 + i * 11)); }
+    }
+    f(7.5); txt('Vytištěno ' + vjrTisk(ted), W / 2, H - 14, { align: 'center' });
+  });
+  return doc;
+}
+
 /* ====================== úložiště GTFS (IndexedDB) ====================== */
 const idb = {
   db: null,
@@ -1100,6 +1409,7 @@ if (typeof document !== 'undefined') (function () {
       kresliSpoje(); nahled();
     });
     $('kopirovat').addEventListener('click', kopiruj);
+    $('vjrBtn').addEventListener('click', vjrExport);
     $('palExport').addEventListener('click', exportPalubak);
     $('gtfsSoubor').addEventListener('change', async (e) => {
       const f = e.target.files[0]; if (!f) return;
@@ -1168,7 +1478,7 @@ if (typeof document !== 'undefined') (function () {
     if (!varianty.length) {
       obeh = null;
       $('varianty').innerHTML = '';
-      $('spojeCard').hidden = true; $('nahledCard').hidden = true; stavLista();
+      $('spojeCard').hidden = true; $('nahledCard').hidden = true; $('vjrCard').hidden = true; stavLista();
       return;
     }
     ls.set('obeh', varianty[0].o);
@@ -2155,7 +2465,7 @@ if (typeof document !== 'undefined') (function () {
       `<button class="chip" aria-pressed="${j === i}" data-i="${j}">${esc(v.d)}</button>`).join('');
     $('varianty').querySelectorAll('.chip').forEach((b) => b.addEventListener('click', () => nastavVariantu(+b.dataset.i)));
     $('historie').hidden = true;
-    kresliSpoje(); nahled(); dohledejVuz(obeh); nactiZaznamy(obeh);
+    kresliSpoje(); nahled(); dohledejVuz(obeh); nactiZaznamy(obeh); vjrNaplnit();
   }
 
   /* ---------- záznam vypravení (větev "vypraveni" na GitHubu, plní ji workflow každé 3 minuty) ---------- */
@@ -2323,6 +2633,48 @@ if (typeof document !== 'undefined') (function () {
   const aktualniText = () => obeh ? textVVJR(obeh, R.spoje, vybrane, live, $('optDopravce').checked, $('optVuz').checked) : '';
 
   const aktualniHtml = () => obeh ? textVVJR(obeh, R.spoje, vybrane, live, $('optDopravce').checked, $('optVuz').checked, true) : '';
+
+  /* ---------- export VJŘ do PDF ---------- */
+  const VJR_POLE = { vjrProv: 'provozovna', vjrTyp: 'typVozu', vjrGraf: 'cisGraf', vjrOd: 'platiOd', vjrVyj: 'vyjezd', vjrZat: 'zatazeni', vjrPozn: 'poznamky' };
+  const vjrKlic = (o) => 'vjr|' + o.o + '|' + (o.maska || []).map((x) => x ? 1 : 0).join('');
+  function vjrPlatiOd(o) {
+    if (!R || R.od == null) return '';
+    const n = String(R.od), d = new Date(+n.slice(0, 4), +n.slice(4, 6) - 1, +n.slice(6, 8));
+    d.setDate(d.getDate() + (o.prvni || 0));
+    return vjrDatum(d);
+  }
+  function vjrNaplnit() {
+    $('vjrCard').hidden = !obeh;
+    if (!obeh) return;
+    let ulozene = {};
+    try { ulozene = JSON.parse(ls.get(vjrKlic(obeh)) || ls.get('vjr|' + obeh.o) || '{}'); } catch {}
+    const prov = ls.get('vjrProv|' + String(obeh.kmen)) || '';
+    for (const [id, k] of Object.entries(VJR_POLE)) $(id).value = ulozene[k] || (k === 'provozovna' ? prov : '') || '';
+    if (!$('vjrOd').value) $('vjrOd').value = vjrPlatiOd(obeh);
+    $('vjrVse').checked = !!ulozene.vsechny;
+    $('vjrStav').textContent = '';
+  }
+  async function vjrExport() {
+    if (!obeh || !R) return;
+    const opt = { vsechny: $('vjrVse').checked };
+    for (const [id, k] of Object.entries(VJR_POLE)) opt[k] = $(id).value.trim();
+    const ulozit = { ...opt }; if (ulozit.platiOd === vjrPlatiOd(obeh)) delete ulozit.platiOd;
+    ls.set(vjrKlic(obeh), JSON.stringify(ulozit));
+    if (opt.provozovna) ls.set('vjrProv|' + String(obeh.kmen), opt.provozovna);
+    const dp = (obeh.dopravci || [])[0] || '';
+    if (dp && !/dopravn[ií] podnik|integrovan/i.test(dp)) opt.firma = dp;
+    $('vjrBtn').disabled = true; $('vjrStav').textContent = 'Připravuji PDF…';
+    try {
+      await vjrNactiKnihovny();
+      const doc = vjrPdf(obeh, R.spoje, opt);
+      const typ = { 'Pracovní den': 'PD', 'Sobota + Neděle': 'SONE', 'Sobota': 'SO', 'Neděle': 'NE' }[vjrTypDne(obeh.maska)] || 'X';
+      const jm = `VJR_${obeh.kmen}_${obeh.poradi}_${typ}${opt.platiOd ? '_' + opt.platiOd.replace(/\s/g, '') : ''}.pdf`.replace(/[\/\\:*?"<>|]/g, '_');
+      doc.save(jm);
+      $('vjrStav').textContent = 'Staženo: ' + jm;
+    } catch (e) {
+      $('vjrStav').textContent = 'Nepodařilo se: ' + (e && e.message || e) + ' (napoprvé je potřeba internet).';
+    } finally { $('vjrBtn').disabled = false; }
+  }
 
   function nahled() {
     const t = aktualniText();
