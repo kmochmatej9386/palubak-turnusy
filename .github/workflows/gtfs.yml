@@ -25,7 +25,7 @@ jobs:
           KEEP = {
             'agency.txt': ['agency_id', 'agency_name'],
             'routes.txt': ['route_id', 'agency_id', 'route_short_name', 'route_type'],
-            'trips.txt': ['route_id', 'service_id', 'trip_id'],
+            'trips.txt': ['route_id', 'service_id', 'trip_id', 'block_id'],
             'stop_times.txt': ['trip_id', 'arrival_time', 'departure_time', 'stop_id', 'stop_sequence'],
             'stops.txt': ['stop_id', 'stop_name'],
             'calendar.txt': None,

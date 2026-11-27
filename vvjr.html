@@ -405,7 +405,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.14';
+const APP_VERZE = '2026-11-27.15';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -619,14 +619,47 @@ async function zpracuj(blob, turnusy, odData, progress = () => {}) {
   progress('Čtu spoje…', 0);
   const spoje = {};
   let bezPoradi = 0;
+  // block_id (PID): spoje, kde vozidlo pokračuje dál jako jiný spoj / jiná linka (174 -> 352 v Lukách, 380 -> 952…).
+  // Všechny spoje bloku jede jeden vůz, takže patří do stejného oběhu – i když je Golemio nezná nebo je hlásí pod jiným pořadím.
+  const bloky = new Map();   // block_id -> [trip_id…]
+  const kandidati = [];
   await tabulka(zip, 'trips.txt', (r) => {
     const aktivni = [];
     for (let i = 0; i < dny.length; i++) if (jede(r.service_id, dny[i])) aktivni.push(i);
     if (!aktivni.length) return;
-    if (!najdiTurnus(turnusy, r.trip_id)) { bezPoradi++; return; }
-    const [linka, dopravce] = linky[r.route_id] || [r.route_id, ''];
-    spoje[r.trip_id] = { linka, dopravce, sid: r.service_id, dny: aktivni, t: [] };
+    kandidati.push([r.trip_id, r.route_id, r.service_id, aktivni]);
+    if (r.block_id) { if (!bloky.has(r.block_id)) bloky.set(r.block_id, []); bloky.get(r.block_id).push(r.trip_id); }
   });
+  const blokSpoje = {};      // trip_id -> block_id
+  for (const [b, tids] of bloky) {
+    if (tids.length < 2) continue;
+    const hodnoty = new Map();
+    for (const t of tids) {
+      const v = najdiTurnus(turnusy, t);
+      if (!v) continue;
+      const k = JSON.stringify(v);
+      hodnoty.set(k, (hodnoty.get(k) || 0) + 1);
+    }
+    if (!hodnoty.size) continue;
+    // nejčastější přiřazení v bloku (při shodě to, které má kmenovou linku shodnou s prvním spojem bloku)
+    const prvni = String(b).split('_')[0];
+    const nej = [...hodnoty.entries()].sort((x, y) => y[1] - x[1]
+      || ((JSON.parse(y[0])[1] || prvni) === prvni) - ((JSON.parse(x[0])[1] || prvni) === prvni))[0][0];
+    const v = JSON.parse(nej);
+    const zdroj = tids.find((x) => JSON.stringify(najdiTurnus(turnusy, x)) === nej);
+    const kmen = v.length > 1 && v[1] ? String(v[1]) : String(zdroj).split('_')[0];
+    for (const t of tids) {
+      blokSpoje[t] = b;
+      const puv = najdiTurnus(turnusy, t);
+      // spoj jiné linky v bloku dostane kmenovou linku oběhu
+      if (!puv || JSON.stringify(puv) !== nej) turnusy[t] = String(t).split('_')[0] === kmen ? [v[0]] : [v[0], kmen];
+    }
+  }
+  for (const [tid, route, sid, aktivni] of kandidati) {
+    if (!najdiTurnus(turnusy, tid)) { bezPoradi++; continue; }
+    const [linka, dopravce] = linky[route] || [route, ''];
+    spoje[tid] = { linka, dopravce, sid, dny: aktivni, t: [], blok: blokSpoje[tid] || '' };
+  }
 
   progress('Čtu jízdní řády (stop_times)…', 0);
   let h, iT, iA, iD, iS, iQ;
@@ -2819,6 +2852,7 @@ if (typeof document !== 'undefined') (function () {
     const jm = (x) => String(x).toLowerCase().replace(/\s+/g, ' ').trim();
     for (let i = 1; i < sp.length; i++) {
       const a = R.spoje[sp[i - 1]], b = R.spoje[sp[i]];
+      if (a.blok && a.blok === b.blok) continue;   // vůz pokračuje jako navazující spoj (jiná linka), není to přejezd
       if (jm(a.do) !== jm(b.z)) out.push({ nadpis: 'Přejezd', tid: sp[i], text: `${a.do} ${c(a.prij)} - ${b.z} ${c(b.odj)}` });
     }
     out.push({ nadpis: 'Zatažení', tid: sp[sp.length - 1], text: `${K.do} ${c(K.prij)} - ${misto} ${c(K.prij + 10)}` });
