@@ -212,14 +212,13 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
   <div class="card" id="vjrCard" hidden>
     <div class="head"><h2>Export VJŘ (PDF)</h2></div>
-    <p class="tsub" style="margin:0 0 8px">Vozový jízdní řád vybraného oběhu ve formátu DPP. Údaje, které nejsou v jízdních řádech, doplňte (zapamatují se pro tento oběh).</p>
+    <p class="tsub" style="margin:0 0 8px">Vozový jízdní řád vybraného oběhu ve formátu DPP. Dopravce, provozovna, výjezd, přejezdy a zatažení se doplní samy.</p>
     <div class="vjrf">
-      <input class="pole" id="vjrProv" placeholder="Provozovna (např. Hostivař)">
+      <input class="pole" id="vjrProv" list="vjrProvSeznam" placeholder="Provozovna / vozovna">
+      <datalist id="vjrProvSeznam"></datalist>
       <input class="pole" id="vjrTyp" placeholder="Typ vozu (např. SdN /G/)">
-      <input class="pole" id="vjrGraf" placeholder="Čís. grafikonu (např. T8511)">
       <input class="pole" id="vjrOd" placeholder="Platí od">
-      <textarea class="pole" id="vjrVyj" rows="2" placeholder="Výjezd (např. Depo HO 4:50 - Vrata HO 4:53 - Palmovka 5:05)"></textarea>
-      <textarea class="pole" id="vjrZat" rows="2" placeholder="Zatažení"></textarea>
+      <div class="tsub" id="vjrTrasy"></div>
       <textarea class="pole" id="vjrPozn" rows="2" placeholder="Poznámky"></textarea>
       <label><input type="checkbox" id="vjrVse"> Všechny zastávky (jinak jen časové body jako v DPP VJŘ)</label>
     </div>
@@ -405,7 +404,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.6';
+const APP_VERZE = '2026-11-27.7';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -1019,13 +1018,14 @@ function vjrPdf(o, spoje, opt = {}) {
   }
 
   // ---- text Výjezd / Zatažení: úseky oddělené " - ", časy tučně, zalomení s odsazením ----
+  const CAS_RE = /^\(?\d{1,2}:\d{2}\)?,?$/;
   function trasaRadky(nadpis, text) {
     f('A', 11, 'bold');
     const x1 = 22.2 + sirka(nadpis + ':') + 3.2, XODS = 65.9, MAX = XP - 6;
     const useky = String(text).split(/\s+-\s+/).map((u) => u.trim()).filter(Boolean);
     const out = [[]];
     let x = x1;
-    const delka = (u) => u.split(/\s+/).reduce((a, w) => { f('A', 11, /^\d{1,2}:\d{2}$/.test(w) ? 'bold' : 'normal'); return a + sirka(w + ' '); }, 0);
+    const delka = (u) => u.split(/\s+/).reduce((a, w) => { f('A', 11, CAS_RE.test(w) ? 'bold' : 'normal'); return a + sirka(w + ' '); }, 0);
     useky.forEach((u, i) => {
       const pre = i ? '- ' : '';
       f('A', 11); const wp = sirka(pre);
@@ -1039,24 +1039,26 @@ function vjrPdf(o, spoje, opt = {}) {
   const trasaV = (n) => n ? 15.2 * n - 0.9 : 0;
 
   // ---- rozdělení na listy ----
+  // opt.trasy = [{ nadpis: 'Výjezd'|'Přejezd'|'Zatažení', text, tid }] – řádek se píše na list, kde je spoj tid
   const HLAV_KONEC = 118.9;
   const POZN_MIN = 112;
-  const prvniRadky = opt.vyjezd ? trasaRadky('Výjezd', opt.vyjezd) : [];
-  const posledniRadky = opt.zatazeni ? trasaRadky('Zatažení', opt.zatazeni) : [];
-  const listy = [{ bloky: [], vyjezd: true }];
-  let y = HLAV_KONEC + (prvniRadky.length ? trasaV(prvniRadky.length) : 42.1);
+  const trasy = (opt.trasy || []).map((t) => ({ ...t, radky: trasaRadky(t.nadpis, t.text) }));
+  if (!opt.trasy && opt.vyjezd) trasy.push({ nadpis: 'Výjezd', tid: R.tids[0], radky: trasaRadky('Výjezd', opt.vyjezd) });
+  if (!opt.trasy && opt.zatazeni) trasy.push({ nadpis: 'Zatažení', tid: R.tids[R.tids.length - 1], radky: trasaRadky('Zatažení', opt.zatazeni) });
+  const trasyListu = (l) => trasy.filter((t) => l.bloky.some((b) => b.sl.includes(t.tid)));
+  const vyskaTras = (l) => { const n = trasyListu(l).reduce((a, t) => a + t.radky.length, 0); return n ? trasaV(n) + 1.5 : 0; };
+  const vyskaListu = (l) => vyskaTras(l) + l.bloky.reduce((a, b) => a + 1.5 + b.v, 0);
+  const listy = [{ bloky: [] }];
   for (const b of bloky) {
-    if (y + 2.9 + b.v > VNITR_DOLE && listy[listy.length - 1].bloky.length) { listy.push({ bloky: [] }); y = HLAV_KONEC; }
-    listy[listy.length - 1].bloky.push(b); y += 1.5 + b.v;
+    const l = listy[listy.length - 1];
+    const zkus = { bloky: [...l.bloky, b] };
+    if (l.bloky.length && HLAV_KONEC + vyskaListu(zkus) + 1.5 > VNITR_DOLE) listy.push({ bloky: [b] });
+    else l.bloky.push(b);
   }
-  // zatažení patří na poslední list nahoru pod hlavičku – musí se tam vejít i s Poznámkami
   let posl = listy[listy.length - 1];
-  const vyskaListu = (l) => (l.vyjezd ? (prvniRadky.length ? trasaV(prvniRadky.length) : 42.1) : 0)
-    + (posledniRadky.length ? trasaV(posledniRadky.length) + (l.vyjezd && prvniRadky.length ? 0 : 0) : 0)
-    + l.bloky.reduce((a, b) => a + 1.5 + b.v, 0);
   if (HLAV_KONEC + vyskaListu(posl) + 3 + POZN_MIN > VNITR_DOLE) { listy.push({ bloky: [] }); posl = listy[listy.length - 1]; }
 
-  const firma = opt.firma || 'Dopravní podnik hlavního města Prahy, akciová společnost';
+  const firma = opt.firma || 'Dopravní podnik hlavního města Prahy a.s.';
   listy.forEach((list, li) => {
     if (li) doc.addPage();
     doc.setDrawColor(0); doc.setTextColor(0);
@@ -1093,13 +1095,24 @@ function vjrPdf(o, spoje, opt = {}) {
       });
       y += trasaV(radky.length);
     };
-    let ohraniceno = false;
-    if (list.vyjezd) {
-      if (prvniRadky.length) trasa('Výjezd', prvniRadky); else y += 42.1;
-      ohraniceno = true;
+    const tl = trasyListu(list);
+    if (tl.length) {
+      let i0 = 0;
+      for (const t of tl) {
+        t.radky.forEach((r, i) => {
+          const yb = y + 12.4 + (i0 + i) * 15.2;
+          if (i === 0) { f('A', 11, 'bold'); txt(t.nadpis + ':', 22.2, yb); }
+          for (const { pre, u, x } of r) {
+            let xx = x;
+            if (pre) { f('A', 11); txt(pre, xx, yb); xx += sirka(pre); }
+            for (const w of u.split(/\s+/)) { f('A', 11, CAS_RE.test(w) ? 'bold' : 'normal'); txt(w, xx, yb); xx += sirka(w + ' '); }
+          }
+        });
+        i0 += t.radky.length;
+      }
+      y += trasaV(i0);
+      dvojita(y); y += 1.5;
     }
-    if (list === posl && posledniRadky.length) { trasa('Zatažení', posledniRadky); ohraniceno = true; }
-    if (ohraniceno) { dvojita(y); y += 1.5; }
 
     for (const b of list.bloky) {
       const top = y + 1.4;
@@ -1134,7 +1147,7 @@ function vjrPdf(o, spoje, opt = {}) {
         });
         if (R.stitky[t] && s.prvniRadek >= 0) {
           const g = prvniZast + m[s.prvniRadek] + (s.smer === 1 ? -1 : 1);
-          doc.setFillColor(192, 192, 192); doc.rect(x, rTop(g), S.sw, S.rv + 0.1, 'F');
+          doc.setFillColor(192, 192, 192); doc.rect(x + 0.6, rTop(g) + 1.3, S.sw - 1.2, S.rv - 3, 'F');
           f(S.stitek[0], S.stitek[1], 'bold'); txt(R.stitky[t], x + S.sw / 2, rTop(g) + (tram ? 11.6 : 10.1), 'center');
         }
       });
@@ -1495,6 +1508,7 @@ if (typeof document !== 'undefined') (function () {
     });
     $('kopirovat').addEventListener('click', kopiruj);
     $('vjrBtn').addEventListener('click', vjrExport);
+    $('vjrProv').addEventListener('input', vjrUkazTrasy);
     $('vjrPismaBtn').addEventListener('click', () => $('vjrPismaSoubor').click());
     $('vjrPismaSoubor').addEventListener('change', vjrNahratPisma);
     $('vjrPismaSmazat').addEventListener('click', async () => { await idb.set('vjrVlastniPisma', null); vjrFonty = null; vjrPismaInfo(); });
@@ -2724,24 +2738,98 @@ if (typeof document !== 'undefined') (function () {
   const aktualniHtml = () => obeh ? textVVJR(obeh, R.spoje, vybrane, live, $('optDopravce').checked, $('optVuz').checked, true) : '';
 
   /* ---------- export VJŘ do PDF ---------- */
-  const VJR_POLE = { vjrProv: 'provozovna', vjrTyp: 'typVozu', vjrGraf: 'cisGraf', vjrOd: 'platiOd', vjrVyj: 'vyjezd', vjrZat: 'zatazeni', vjrPozn: 'poznamky' };
+  const VJR_POLE = { vjrTyp: 'typVozu', vjrOd: 'platiOd', vjrPozn: 'poznamky' };
+  const VJR_VOZOVNY = { HL: 'Hloubětín', KO: 'Kobylisy', MO: 'Motol', PA: 'Pankrác', SA: 'Strašnice', SE: 'Střešovice', VO: 'Vokovice', 'ŽI': 'Žižkov' };
+  const VJR_GARAZE_DPP = ['Hostivař', 'Kačerov', 'Klíčov', 'Řepy'];
+  // zkratky dopravců z Golemia -> název do hlavičky VJŘ
+  const VJR_FIRMY = [
+    [/^DP PRAHA/i, 'Dopravní podnik hlavního města Prahy a.s.'],
+    [/^ARRIVA CITY/i, 'ARRIVA CITY a.s.'],
+    [/^ARRIVA S[ČC]/i, 'ARRIVA STŘEDNÍ ČECHY s.r.o.'],
+    [/^ARRIVA AUTOBUSY/i, 'ARRIVA AUTOBUSY a.s.'],
+    [/^ČSAD S[ČC]\b/i, 'ČSAD Střední Čechy, a.s.'],
+    [/^ČSAD POLKOST/i, 'ČSAD POLKOST spol. s r.o.'],
+    [/^TRANSDEV S[ČC]/i, 'Transdev Střední Čechy s.r.o.'],
+    [/^OAD KOL[IÍ]N/i, 'Okresní autobusová doprava KOLÍN, s.r.o.'],
+    [/^STENBUS/i, 'STENBUS s.r.o.'],
+    [/^ZDAR/i, 'ZDAR, a.s.'],
+  ];
   const vjrKlic = (o) => 'vjr|' + o.o + '|' + (o.maska || []).map((x) => x ? 1 : 0).join('');
+  const vjrJeTram = (o) => /^\d+$/.test(String(o.kmen)) && +o.kmen < 100;
   function vjrPlatiOd(o) {
     if (!R || R.od == null) return '';
     const n = String(R.od), d = new Date(+n.slice(0, 4), +n.slice(4, 6) - 1, +n.slice(6, 8));
     d.setDate(d.getDate() + (o.prvni || 0));
     return vjrDatum(d);
   }
-  function vjrNaplnit() {
+  // nejčastější dopravce oběhu: živá data / dnešní záznam, jinak historie vypravení
+  async function vjrDopravce(o) {
+    const c = new Map(), pridej = (r) => { if (r && r[1]) c.set(r[1], (c.get(r[1]) || 0) + 1); };
+    for (const t of o.s) pridej((live && (live.trip[t] || (live.hist || {})[t])) || ZAZN[t]);
+    if (!c.size) {
+      const data = await nactiVyp(kmenObehu(o)), por = porObehu(o);
+      if (data) for (const den of Object.values(data)) if (den[por]) for (const r of Object.values(den[por])) pridej(r);
+    }
+    return [...c.entries()].sort((a, b) => b[1] - a[1]).map((x) => x[0])[0] || '';
+  }
+  function vjrRozlozDopravce(d) {     // "ARRIVA CITY (Kladno)" -> { firma, provozovna: 'Kladno' }
+    const m = String(d || '').match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+    const zaklad = m ? m[1] : String(d || '');
+    const f = VJR_FIRMY.find(([re]) => re.test(zaklad));
+    return { firma: f ? f[1] : zaklad, provozovna: m ? m[2] : '', dpp: !zaklad || /^DP PRAHA/i.test(zaklad) };
+  }
+  // zadaná provozovna -> { nazev do hlavičky, text do výjezdu/zatažení }
+  function vjrProvozovna(o, vstup) {
+    const v = String(vstup || '').trim();
+    if (!v) return { nazev: '', text: '' };
+    if (vjrJeTram(o)) {
+      const kod = Object.keys(VJR_VOZOVNY).find((k) => k === v.toUpperCase().replace(/^VOZOVNA\s+/, '') || VJR_VOZOVNY[k].toLowerCase() === v.toLowerCase().replace(/^vozovna\s+/, ''));
+      if (kod) return { nazev: VJR_VOZOVNY[kod], text: 'Vozovna ' + kod };
+      return { nazev: v.replace(/^vozovna\s+/i, ''), text: /^vozovna/i.test(v) ? v : 'Vozovna ' + v };
+    }
+    const n = v.replace(/^provozovna\s+/i, '');
+    return { nazev: n, text: 'Provozovna ' + n };
+  }
+  // výjezd, manipulační přejezdy a zatažení podle spojů oběhu
+  function vjrTrasy(o, prov) {
+    const sp = o.s.filter((t) => R.spoje[t]).slice().sort((a, b) => R.spoje[a].odj - R.spoje[b].odj);
+    if (!sp.length) return [];
+    const c = (m) => vjrCas(((m % 1440) + 1440) % 1440);
+    const P = R.spoje[sp[0]], K = R.spoje[sp[sp.length - 1]];
+    const misto = prov.text || 'Provozovna';
+    const out = [{ nadpis: 'Výjezd', tid: sp[0], text: `${misto} ${c(P.odj - 20)} - ${P.z} ${c(P.odj - 10)}` }];
+    const jm = (x) => String(x).toLowerCase().replace(/\s+/g, ' ').trim();
+    for (let i = 1; i < sp.length; i++) {
+      const a = R.spoje[sp[i - 1]], b = R.spoje[sp[i]];
+      if (jm(a.do) !== jm(b.z)) out.push({ nadpis: 'Přejezd', tid: sp[i], text: `${a.do} (${c(a.prij)}) - ${b.z} (${c(b.odj)})` });
+    }
+    out.push({ nadpis: 'Zatažení', tid: sp[sp.length - 1], text: `${K.do} ${c(K.prij)} - ${misto} ${c(K.prij + 10)}` });
+    return out;
+  }
+  function vjrUkazTrasy() {
+    if (!obeh || !R) return;
+    const t = vjrTrasy(obeh, vjrProvozovna(obeh, $('vjrProv').value));
+    $('vjrTrasy').innerHTML = t.map((x) => `<b>${esc(x.nadpis)}:</b> ${esc(x.text)}`).join('<br>');
+  }
+  async function vjrNaplnit() {
     $('vjrCard').hidden = !obeh;
     if (!obeh) return;
+    const o = obeh;
     let ulozene = {};
-    try { ulozene = JSON.parse(ls.get(vjrKlic(obeh)) || ls.get('vjr|' + obeh.o) || '{}'); } catch {}
-    const prov = ls.get('vjrProv|' + String(obeh.kmen)) || '';
-    for (const [id, k] of Object.entries(VJR_POLE)) $(id).value = ulozene[k] || (k === 'provozovna' ? prov : '') || '';
-    if (!$('vjrOd').value) $('vjrOd').value = vjrPlatiOd(obeh);
+    try { ulozene = JSON.parse(ls.get(vjrKlic(o)) || ls.get('vjr|' + o.o) || '{}'); } catch {}
+    for (const [id, k] of Object.entries(VJR_POLE)) $(id).value = ulozene[k] || '';
+    if (!$('vjrOd').value) $('vjrOd').value = vjrPlatiOd(o);
     $('vjrVse').checked = !!ulozene.vsechny;
     $('vjrStav').textContent = '';
+    $('vjrProvSeznam').innerHTML = (vjrJeTram(o) ? Object.keys(VJR_VOZOVNY).map((k) => 'Vozovna ' + k) : VJR_GARAZE_DPP)
+      .map((x) => `<option value="${esc(x)}">`).join('');
+    $('vjrProv').placeholder = vjrJeTram(o) ? 'Vozovna (HL, KO, MO, PA, SA, SE, VO, ŽI)' : 'Provozovna (např. Hostivař)';
+    $('vjrProv').value = ulozene.provozovna || ls.get('vjrProv|' + String(o.kmen)) || '';
+    vjrUkazTrasy();
+    const d = vjrRozlozDopravce(await vjrDopravce(o));
+    if (obeh !== o) return;
+    o.vjrFirma = d.firma;
+    if (d.provozovna && !d.dpp) { $('vjrProv').value = d.provozovna; vjrUkazTrasy(); }
   }
   // co je to za písmo: rodina z tabulky "name", tloušťka a kurzíva z "OS/2"
   function vjrRozpoznejPismo(buf) {
@@ -2803,19 +2891,24 @@ if (typeof document !== 'undefined') (function () {
   }
   async function vjrExport() {
     if (!obeh || !R) return;
+    const o = obeh;
     const opt = { vsechny: $('vjrVse').checked };
     for (const [id, k] of Object.entries(VJR_POLE)) opt[k] = $(id).value.trim();
-    const ulozit = { ...opt }; if (ulozit.platiOd === vjrPlatiOd(obeh)) delete ulozit.platiOd;
-    ls.set(vjrKlic(obeh), JSON.stringify(ulozit));
-    if (opt.provozovna) ls.set('vjrProv|' + String(obeh.kmen), opt.provozovna);
-    const dp = (obeh.dopravci || [])[0] || '';
-    if (dp && !/dopravn[ií] podnik|integrovan/i.test(dp)) opt.firma = dp;
+    const provVstup = $('vjrProv').value.trim();
+    const ulozit = { ...opt, provozovna: provVstup }; if (ulozit.platiOd === vjrPlatiOd(o)) delete ulozit.platiOd;
+    ls.set(vjrKlic(o), JSON.stringify(ulozit));
+    if (provVstup) ls.set('vjrProv|' + String(o.kmen), provVstup);
+    const prov = vjrProvozovna(o, provVstup);
+    opt.provozovna = prov.nazev;
+    opt.trasy = vjrTrasy(o, prov);
     $('vjrBtn').disabled = true; $('vjrStav').textContent = 'Připravuji PDF…';
     try {
+      if (!o.vjrFirma) o.vjrFirma = vjrRozlozDopravce(await vjrDopravce(o)).firma;
+      opt.firma = o.vjrFirma || 'Dopravní podnik hlavního města Prahy a.s.';
       await vjrNactiKnihovny();
-      const doc = vjrPdf(obeh, R.spoje, opt);
-      const typ = { 'Pracovní den': 'PD', 'Sobota+Neděle': 'SONE', 'Sobota': 'SO', 'Neděle': 'NE' }[vjrTypDne(obeh.maska)] || 'X';
-      const jm = `VJR_${obeh.kmen}_${obeh.poradi}_${typ}${opt.platiOd ? '_' + opt.platiOd.replace(/\s/g, '') : ''}.pdf`.replace(/[\/\\:*?"<>|]/g, '_');
+      const doc = vjrPdf(o, R.spoje, opt);
+      const typ = { 'Pracovní den': 'PD', 'Sobota+Neděle': 'SONE', 'Sobota': 'SO', 'Neděle': 'NE' }[vjrTypDne(o.maska)] || 'X';
+      const jm = `VJR_${o.kmen}_${o.poradi}_${typ}${opt.platiOd ? '_' + opt.platiOd.replace(/\s/g, '') : ''}.pdf`.replace(/[\/\\:*?"<>|]/g, '_');
       doc.save(jm);
       $('vjrStav').textContent = 'Staženo: ' + jm;
     } catch (e) {
