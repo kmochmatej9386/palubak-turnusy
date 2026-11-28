@@ -1,10 +1,10 @@
 name: GTFS PID
-# Jednou týdně stáhne jízdní řády PID (GTFS) a uloží je do větve "gtfs" tohoto repozitáře.
+# Každý den stáhne jízdní řády PID (GTFS) a uloží je do větve "gtfs" tohoto repozitáře.
 # Aplikace VVJŘ si je odtud stáhne sama (z data.pid.cz to prohlížeč nedovolí).
 # Ve větvi je vždy jen jedna verze (přepisuje se), takže repozitář neroste.
 on:
   schedule:
-    - cron: '17 2 * * 1'      # každé pondělí ve 3:17 / 4:17 českého času
+    - cron: '17 2 * * *'      # každý den ve 3:17 / 4:17 českého času (PID vydává GTFS denně)
   workflow_dispatch:           # ručně: Actions → GTFS PID → Run workflow
 permissions:
   contents: write

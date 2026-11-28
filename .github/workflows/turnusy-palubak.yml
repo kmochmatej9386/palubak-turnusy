@@ -1,0 +1,52 @@
+name: Turnusy pro Palubák
+# Každou hodinu spustí VVJŘ v prohlížeči bez okna a uloží turnusy_palubak.json – úplně stejné oběhy jako ve VVJŘ.
+# Palubák (režim Turnusy z Golemia) si tenhle hotový soubor stahuje, nic si už sám neskládá.
+on:
+  schedule:
+    - cron: '37 * * * *'
+  workflow_run:
+    workflows: ['GTFS PID']
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: turnusy-palubak
+  cancel-in-progress: false
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Playwright
+        run: |
+          npm i --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium
+      - name: Vygenerovat turnusy_palubak.json z VVJŘ
+        run: |
+          python3 -m http.server 8000 >/dev/null 2>&1 &
+          sleep 2
+          node tools/export_palubak.mjs http://127.0.0.1:8000/vvjr.html novy.json
+      - name: Uložit (jen když se turnusy změnily)
+        run: |
+          python3 - <<'PY'
+          import json, os
+          n = json.load(open('novy.json'))
+          try: s = json.load(open('turnusy_palubak.json'))
+          except Exception: s = {}
+          if s.get('turnusy') == n.get('turnusy'):
+              print('beze změny'); os.remove('novy.json')
+          else:
+              os.replace('novy.json', 'turnusy_palubak.json'); print('změněno', len(n['turnusy']))
+          PY
+          if git status --porcelain turnusy_palubak.json | grep -q .; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898699+github-actions[bot]@users.noreply.github.com"
+            git add turnusy_palubak.json
+            git commit -m "Turnusy pro Palubák (z VVJŘ)"
+            for i in 1 2 3 4 5; do git pull --rebase -X theirs origin main && git push && break; sleep 5; done
+          fi
