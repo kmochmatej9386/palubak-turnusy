@@ -405,7 +405,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-27.15';
+const APP_VERZE = '2026-11-28.1';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -630,6 +630,46 @@ async function zpracuj(blob, turnusy, odData, progress = () => {}) {
     kandidati.push([r.trip_id, r.route_id, r.service_id, aktivni]);
     if (r.block_id) { if (!bloky.has(r.block_id)) bloky.set(r.block_id, []); bloky.get(r.block_id).push(r.trip_id); }
   });
+  // Golemio u průjezdných oběhů střídá označení: tentýž vůz je jednou „174/2“, jindy „352/2“ (podle linky, na které zrovna jede).
+  // Spoje jednoho bloku jede jeden vůz -> taková označení se sloučí do jednoho oběhu. Kmenová linka = ta, jejíž spoje
+  // v oběhu převažují (174 + 352 + 301 -> 174).
+  {
+    const linkaSpoje = (t) => String(t).split('_')[0];
+    const klic = (t, v) => (v.length > 1 && v[1] ? String(v[1]) : linkaSpoje(t)) + '|' + v[0];
+    const rodic = new Map();
+    const najdi = (k) => { while (rodic.has(k) && rodic.get(k) !== k) k = rodic.get(k); return k; };
+    const spoj = (a, b) => { a = najdi(a); b = najdi(b); if (a !== b) rodic.set(b, a); };
+    for (const tids of bloky.values()) {
+      if (tids.length < 2) continue;
+      const ks = [];
+      for (const t of tids) { const v = najdiTurnus(turnusy, t); if (v) ks.push(klic(t, v)); }
+      for (let i = 1; i < ks.length; i++) if (ks[i].split('|')[1] === ks[0].split('|')[1]) spoj(ks[0], ks[i]);
+    }
+    if (rodic.size) {
+      const vRodine = new Set([...rodic.keys(), ...rodic.values()]);
+      const skup = new Map();     // kořen -> { klíče, počty spojů podle linky }
+      for (const [t, v] of Object.entries(turnusy)) {
+        if (!Array.isArray(v)) continue;
+        const k = klic(t, v); if (!vRodine.has(k)) continue;
+        const r = najdi(k);
+        if (!skup.has(r)) skup.set(r, { klice: new Set(), linky: new Map() });
+        const g = skup.get(r); g.klice.add(k); g.linky.set(linkaSpoje(t), (g.linky.get(linkaSpoje(t)) || 0) + 1);
+      }
+      const prevod = new Map();   // klíč -> [pořadí, kmen]
+      for (const g of skup.values()) {
+        if (g.klice.size < 2) continue;
+        const kmeny = [...g.klice].map((k) => k.split('|')[0]);
+        const kmen = kmeny.sort((a, b) => (g.linky.get(b) || 0) - (g.linky.get(a) || 0) || (+a || 1e9) - (+b || 1e9))[0];
+        const por = +[...g.klice][0].split('|')[1];
+        for (const k of g.klice) prevod.set(k, [por, kmen]);
+      }
+      if (prevod.size) for (const [t, v] of Object.entries(turnusy)) {
+        if (!Array.isArray(v)) continue;
+        const n = prevod.get(klic(t, v)); if (!n) continue;
+        turnusy[t] = linkaSpoje(t) === n[1] ? [n[0]] : [n[0], n[1]];
+      }
+    }
+  }
   const blokSpoje = {};      // trip_id -> block_id
   for (const [b, tids] of bloky) {
     if (tids.length < 2) continue;
@@ -650,9 +690,9 @@ async function zpracuj(blob, turnusy, odData, progress = () => {}) {
     const kmen = v.length > 1 && v[1] ? String(v[1]) : String(zdroj).split('_')[0];
     for (const t of tids) {
       blokSpoje[t] = b;
-      const puv = najdiTurnus(turnusy, t);
-      // spoj jiné linky v bloku dostane kmenovou linku oběhu
-      if (!puv || JSON.stringify(puv) !== nej) turnusy[t] = String(t).split('_')[0] === kmen ? [v[0]] : [v[0], kmen];
+      // Golemio je zdroj pravdy: spoj, u kterého pořadí známe, se NIKDY nepřepisuje (jinak se 352/301 slily do oběhů 174).
+      // Doplní se jen spoje bloku, které Golemio ještě nezachytil.
+      if (!najdiTurnus(turnusy, t)) turnusy[t] = String(t).split('_')[0] === kmen ? [v[0]] : [v[0], kmen];
     }
   }
   for (const [tid, route, sid, aktivni] of kandidati) {
