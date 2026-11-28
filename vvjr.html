@@ -405,7 +405,7 @@ button.primary:disabled { opacity: .4; cursor: default; }
 
 <script>
 /* ====================== nastavení ====================== */
-const APP_VERZE = '2026-11-28.1';
+const APP_VERZE = '2026-11-28.2';
 // Sdílené účty (Firebase). Dokud je tu null, projetí se ukládají jen v telefonu.
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyCVpNWZjaWiFGqe9aOJgjjY_9Ri1UOc6FE',
@@ -564,8 +564,11 @@ const prirozene = (a, b) => String(a).localeCompare(String(b), 'cs', { numeric: 
 // ID spoje PID = linka_číslo_verze (např. 202_2548_261019). Po vydání nového JŘ dostane stejný spoj novou verzi
 // (202_2548_261119) a v turnusy.json je pořád pod starou. Takový spoj se najde podle linky a čísla spoje (nejnovější verze).
 const turnusyZaklady = new WeakMap();
+const turnusZamitnute = new Set();   // nové verze spojů, které se podle času NESHODUJÍ se starou verzí stejného čísla
+const turnusNahrada = new Map();     // trip_id -> čas odjezdu staré verze (k ověření po načtení stop_times)
 function najdiTurnus(turnusy, tid) {
   if (!turnusy) return null;
+  if (turnusZamitnute.has(tid)) return null;
   const v = turnusy[tid];
   if (v) return v;
   const m = /^(\d+_\d+)_(\d{6})$/.exec(String(tid));
@@ -584,6 +587,7 @@ function najdiTurnus(turnusy, tid) {
   const b = z.get(m[1]);
   if (!b) return null;
   turnusy[tid] = b[1];   // dál se spoj hledá rovnou pod novým ID
+  if (b[1][2]) turnusNahrada.set(tid, b[1][2]);
   return b[1];
 }
 
@@ -726,6 +730,13 @@ async function zpracuj(blob, turnusy, odData, progress = () => {}) {
     const casy = s.t.filter((x) => x[1] != null);
     if (s.t.length < 2 || !casy.length) { delete spoje[tid]; continue; }
     s.z = s.t[0][0]; s.odj = casy[0][2]; s.do = s.t[s.t.length - 1][0]; s.prij = casy[casy.length - 1][1];
+    // pořadí převzaté ze starší verze spoje se stejným číslem platí, jen když spoj odjíždí ve stejný čas
+    // (číslo spoje se mezi verzemi jízdních řádů může přidělit úplně jinému spoji)
+    const puv = turnusNahrada.get(tid);
+    if (puv) {
+      const [hh, mm] = puv.split(':').map(Number), o = ((s.odj % 1440) + 1440) % 1440;
+      if (Math.abs(o - (hh * 60 + mm)) > 1 && Math.abs(o - (hh * 60 + mm)) < 1439) { turnusZamitnute.add(tid); delete turnusy[tid]; delete spoje[tid]; bezPoradi++; continue; }
+    }
   }
 
   // oběhy: den po dni podle (kmenová linka, pořadí), stejné sestavy z různých dnů sloučit
@@ -737,6 +748,28 @@ async function zpracuj(blob, turnusy, odData, progress = () => {}) {
       const k = `${kmen}\u0000${v[0]}\u0000${d}`;
       if (!poDnech.has(k)) poDnech.set(k, { kmen, poradi: v[0], d, tids: [] });
       poDnech.get(k).tids.push(tid);
+    }
+  }
+  // Golemio označuje průjezdné oběhy podle linky, na které vůz zrovna jede (ve všední den 174+352+301 jako „352/x“).
+  // Když v oběhu převažují spoje jiné linky, která je s kmenovou propojená návaznými spoji (block_id), je kmenová ta převažující.
+  {
+    const parLinek = new Set();
+    for (const tids of bloky.values()) {
+      const ls = [...new Set(tids.map((t) => String(t).split('_')[0]))];
+      for (const a of ls) for (const b of ls) if (a !== b) parLinek.add(a + '|' + b);
+    }
+    const prejmenuj = [];
+    for (const [k, g] of poDnech) {
+      const c = new Map();
+      for (const t of g.tids) c.set(spoje[t].linka, (c.get(spoje[t].linka) || 0) + 1);
+      const [nej, n] = [...c.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (nej !== g.kmen && n * 2 > g.tids.length && parLinek.has(g.kmen + '|' + nej)) prejmenuj.push([k, g, nej]);
+    }
+    for (const [k, g, nej] of prejmenuj) {
+      poDnech.delete(k);
+      const k2 = `${nej}\u0000${g.poradi}\u0000${g.d}`;
+      if (poDnech.has(k2)) { const h = poDnech.get(k2); for (const t of g.tids) if (!h.tids.includes(t)) h.tids.push(t); }
+      else poDnech.set(k2, { ...g, kmen: nej });
     }
   }
   const obehy = new Map();

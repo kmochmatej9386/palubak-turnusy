@@ -24,14 +24,18 @@ for (let page = 0; page < 60; page++) {
   off += lim();
   await new Promise((res) => setTimeout(res, 300));
 }
+const hm = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Prague', hour: '2-digit', minute: '2-digit', hour12: false });
 let added = 0;
 for (const f of all) {
   const t = (f.properties || {}).trip || {};
   const id = t.gtfs && t.gtfs.trip_id;
   if (!id || t.sequence_id == null) continue;
   const origin = t.origin_route_name ? String(t.origin_route_name) : '';
-  const val = origin && origin !== String(id).split('_')[0] ? [t.sequence_id, origin] : [t.sequence_id];
-  if (!db[id] || db[id][0] !== val[0] || (db[id][1] || '') !== (val[1] || '')) { db[id] = val; added++; }
+  const kmen = origin && origin !== String(id).split('_')[0] ? origin : '';
+  // čas odjezdu spoje (HH:MM, Praha): podle něj aplikace ověří, že nová verze spoje se stejným číslem je opravdu tentýž spoj
+  const cas = t.start_timestamp ? hm.format(new Date(t.start_timestamp)) : '';
+  const val = cas ? [t.sequence_id, kmen, cas] : (kmen ? [t.sequence_id, kmen] : [t.sequence_id]);
+  if (JSON.stringify(db[id]) !== JSON.stringify(val)) { db[id] = val; added++; }
 }
 const keys = Object.keys(db);
 if (keys.length > MAX) keys.slice(0, keys.length - MAX).forEach((k) => delete db[k]);
